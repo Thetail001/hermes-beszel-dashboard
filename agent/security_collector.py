@@ -41,6 +41,8 @@ CREATE TABLE IF NOT EXISTS security_events (
     ua TEXT,                        -- user agent
     country TEXT,                   -- GeoIP country code
     asn TEXT,                       -- GeoIP ASN
+    lat REAL,                       -- GeoIP latitude
+    lon REAL,                       -- GeoIP longitude
     raw_excerpt TEXT,               -- first 200 chars of raw log
     count INTEGER DEFAULT 1,        -- sampled count
     burst INTEGER DEFAULT 0,        -- burst attack flag
@@ -71,6 +73,8 @@ CREATE TABLE IF NOT EXISTS geo_cache (
     country TEXT,
     asn TEXT,
     org TEXT,
+    lat REAL,
+    lon REAL,
     threat_tags TEXT,               -- JSON array
     first_seen TEXT,
     last_seen TEXT,
@@ -240,34 +244,37 @@ class Collector:
             self._geo = maxminddb.open_database(str(GEOIP_DB))
         return self._geo
 
-    def geo_lookup(self, ip: str) -> tuple[Optional[str], Optional[str]]:
-        """Return (country, city) for IP, caching in geo_cache table."""
+    def geo_lookup(self, ip: str) -> tuple[Optional[str], Optional[str], Optional[float], Optional[float]]:
+        """Return (country, city, lat, lon) for IP, caching in geo_cache table."""
         cached = self.conn.execute(
-            "SELECT country, asn FROM geo_cache WHERE ip = ?", (ip,)
+            "SELECT country, asn, lat, lon FROM geo_cache WHERE ip = ?", (ip,)
         ).fetchone()
         if cached:
-            return cached[0], cached[1]
+            return cached[0], cached[1], cached[2], cached[3]
 
         if not self.geo:
-            return None, None
+            return None, None, None, None
         try:
             r = self.geo.get(ip)
         except Exception:
-            return None, None
+            return None, None, None, None
         if not r:
-            return None, None
+            return None, None, None, None
 
         country = r.get("country", {}).get("iso_code")
         city = r.get("city", {}).get("names", {}).get("en")
         asn = str(r.get("autonomous_system_number", ""))
+        loc = r.get("location", {})
+        lat = loc.get("latitude")
+        lon = loc.get("longitude")
         now = datetime.now(timezone.utc).isoformat()
         self.conn.execute(
-            "INSERT OR REPLACE INTO geo_cache (ip, country, asn, org, first_seen, last_seen, query_count) "
-            "VALUES (?, ?, ?, ?, ?, ?, COALESCE((SELECT query_count + 1 FROM geo_cache WHERE ip = ?), 1))",
-            (ip, country, asn, city, now, now, ip),
+            "INSERT OR REPLACE INTO geo_cache (ip, country, asn, org, lat, lon, first_seen, last_seen, query_count) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT query_count + 1 FROM geo_cache WHERE ip = ?), 1))",
+            (ip, country, asn, city, lat, lon, now, now, ip),
         )
         self.conn.commit()
-        return country, city
+        return country, city, lat, lon
 
     def should_sample(self, ip: str, window: int = 60) -> bool:
         """Rate-limit: same IP within window seconds → count++, skip insert."""
@@ -290,13 +297,13 @@ class Collector:
 
         # Unban events must bypass sampling — they update bans table immediately.
         if ev["event_type"] == "unban":
-            country, city = self.geo_lookup(ip)
+            country, city, lat, lon = self.geo_lookup(ip)
             cur = self.conn.execute(
                 "INSERT INTO security_events "
-                "(ts, machine_id, event_type, src_ip, jail, raw_excerpt, country, asn) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "(ts, machine_id, event_type, src_ip, jail, raw_excerpt, country, asn, lat, lon) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (ev["ts"], MACHINE_ID, ev["event_type"], ip, ev["jail"], ev["raw_excerpt"],
-                 country, city),
+                 country, city, lat, lon),
             )
             self.conn.execute(
                 "UPDATE security_bans SET unbanned_at = ? "
@@ -309,13 +316,13 @@ class Collector:
         if not self.should_sample(ip):
             return
 
-        country, city = self.geo_lookup(ip)
+        country, city, lat, lon = self.geo_lookup(ip)
         cur = self.conn.execute(
             "INSERT INTO security_events "
-            "(ts, machine_id, event_type, src_ip, jail, raw_excerpt, country, asn) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(ts, machine_id, event_type, src_ip, jail, raw_excerpt, country, asn, lat, lon) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ev["ts"], MACHINE_ID, ev["event_type"], ip, ev["jail"], ev["raw_excerpt"],
-             country, city),
+             country, city, lat, lon),
         )
         event_id = cur.lastrowid
 
@@ -333,14 +340,14 @@ class Collector:
         if not self.should_sample(ip):
             return
 
-        country, city = self.geo_lookup(ip)
+        country, city, lat, lon = self.geo_lookup(ip)
         self.conn.execute(
             "INSERT INTO security_events "
-            "(ts, machine_id, event_type, src_ip, uri, ua, raw_excerpt, country, asn) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(ts, machine_id, event_type, src_ip, uri, ua, raw_excerpt, country, asn, lat, lon) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ev["ts"], MACHINE_ID, ev["event_type"], ip,
              ev.get("uri"), ev.get("ua"), ev["raw_excerpt"],
-             country, city),
+             country, city, lat, lon),
         )
         self.conn.commit()
 
@@ -349,13 +356,13 @@ class Collector:
         if not self.should_sample(ip):
             return
 
-        country, city = self.geo_lookup(ip)
+        country, city, lat, lon = self.geo_lookup(ip)
         self.conn.execute(
             "INSERT INTO security_events "
-            "(ts, machine_id, event_type, src_ip, raw_excerpt, country, asn) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(ts, machine_id, event_type, src_ip, raw_excerpt, country, asn, lat, lon) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ev["ts"], MACHINE_ID, ev["event_type"], ip,
-             ev["raw_excerpt"], country, city),
+             ev["raw_excerpt"], country, city, lat, lon),
         )
         self.conn.commit()
 
