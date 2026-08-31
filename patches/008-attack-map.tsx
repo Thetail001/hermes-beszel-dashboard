@@ -445,7 +445,10 @@ function AttackMap({ events, machines, effectLevel, fusionMode }: {
 /** Collapsible rotation settings card */
 function RotationSettings({ onRotate }: { onRotate: (days: number) => void }) {
 	const [open, setOpen] = useState(false)
-	const [keepDays, setKeepDays] = useState(90)
+	const [keepDays, setKeepDays] = useState(() => {
+		const saved = localStorage.getItem("beszel-security-rotation")
+		return saved ? Number(saved) : 90
+	})
 	const [rotating, setRotating] = useState(false)
 	const [lastResult, setLastResult] = useState<string | null>(null)
 
@@ -455,6 +458,7 @@ function RotationSettings({ onRotate }: { onRotate: (days: number) => void }) {
 			const r = await fetch(`/api/plugins/beszel/security/rotate?keep_days=${keepDays}`, { method: "POST" })
 			const d = await r.json()
 			setLastResult(`Deleted ${d.deleted} events older than ${keepDays} days`)
+			localStorage.setItem("beszel-security-rotation", String(keepDays))
 			onRotate(keepDays)
 		} catch {
 			setLastResult("Rotation failed")
@@ -604,9 +608,9 @@ export default function SecurityPage() {
 		setFilter((f) => ({ ...f, ...parsed }))
 	}
 
-	const handleExport = () => {
+	const handleExport = (format: "json" | "csv") => {
 		const qs = buildQueryString(filter)
-		window.open(`/api/plugins/beszel/security/export?${qs}`, "_blank")
+		window.open(`/api/plugins/beszel/security/export?${qs}&format=${format}`, "_blank")
 	}
 
 	const handleRotate = (_days: number) => {
@@ -653,8 +657,11 @@ export default function SecurityPage() {
 						<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={fetchData} disabled={loading}>
 							{loading ? "…" : "↻"}
 						</Button>
-						<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={handleExport}>
-							<Trans>Export</Trans>
+						<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => handleExport("json")}>
+							JSON
+						</Button>
+						<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => handleExport("csv")}>
+							CSV
 						</Button>
 					</div>
 					<div className="flex items-center gap-2">

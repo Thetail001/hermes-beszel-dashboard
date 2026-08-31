@@ -362,8 +362,9 @@ async def security_export(
     country: str = "",
     ip: str = "",
     sort: str = "recent",
+    format: str = "json",
 ):
-    """Export filtered events as JSON download."""
+    """Export filtered events as JSON or CSV download."""
     conn = _sec_db()
     try:
         if start and end:
@@ -401,11 +402,30 @@ async def security_export(
         rows = conn.execute(sql, params).fetchall()
         items = [dict(r) for r in rows]
 
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+
+        if format == "csv":
+            import csv
+            import io
+            output = io.StringIO()
+            if items:
+                writer = csv.DictWriter(output, fieldnames=items[0].keys())
+                writer.writeheader()
+                writer.writerows(items)
+            content = output.getvalue()
+            return Response(
+                content=content,
+                media_type="text/csv",
+                headers={
+                    "Content-Disposition": f"attachment; filename=security-events-{ts}.csv"
+                },
+            )
+
         from fastapi.responses import JSONResponse
         return JSONResponse(
             content={"items": items, "count": len(items), "exported_at": datetime.now(timezone.utc).isoformat()},
             headers={
-                "Content-Disposition": f"attachment; filename=security-events-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+                "Content-Disposition": f"attachment; filename=security-events-{ts}.json"
             },
         )
     finally:
