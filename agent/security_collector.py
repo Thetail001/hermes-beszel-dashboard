@@ -17,7 +17,7 @@ import sqlite3
 import sys
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -287,6 +287,7 @@ class Collector:
         self._local = threading.local()
         self.last_ips: dict[str, float] = {}  # ip -> last event epoch (sampling)
         self._geo = None  # lazy maxminddb reader
+        self._geo_lock = threading.Lock()
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -298,9 +299,24 @@ class Collector:
     @property
     def geo(self):
         if self._geo is None and GEOIP_DB.exists():
-            import maxminddb
-            self._geo = maxminddb.open_database(str(GEOIP_DB))
+            with self._geo_lock:
+                if self._geo is None:  # double-checked locking
+                    import maxminddb
+                    self._geo = maxminddb.open_database(str(GEOIP_DB))
         return self._geo
+
+    def reload_geo(self):
+        """Close current reader and reopen (called after GeoIP DB file is replaced)."""
+        with self._geo_lock:
+            if self._geo is not None:
+                try:
+                    self._geo.close()
+                except Exception:
+                    pass
+                self._geo = None
+            if GEOIP_DB.exists():
+                import maxminddb
+                self._geo = maxminddb.open_database(str(GEOIP_DB))
 
     def geo_lookup(self, ip: str) -> tuple[Optional[str], Optional[str], Optional[float], Optional[float]]:
         """Return (country, city, lat, lon) for IP, caching in geo_cache table."""
@@ -464,6 +480,68 @@ class Collector:
                 if ev:
                     yield ev
 
+    def update_geoip_db(self) -> bool:
+        """Download the current-month dbip-city-lite if the loaded DB is from an older month.
+
+        db-ip.com publishes a fresh lite build each month. We compare the loaded DB's
+        build_epoch month against the current month; if stale, download + validate +
+        atomically replace, then hot-reload the reader (no service restart needed).
+        Safe: on any failure the old DB is kept untouched.
+        """
+        import gzip
+        import os
+        import shutil
+        import urllib.request
+
+        # Determine currently-loaded build month (None if DB missing/unreadable).
+        build_month = None
+        try:
+            if self.geo is not None:
+                be = self.geo.metadata().build_epoch
+                build_month = datetime.fromtimestamp(be, timezone.utc).strftime("%Y-%m")
+        except Exception:
+            build_month = None
+
+        now = datetime.now(timezone.utc)
+        cur_month = now.strftime("%Y-%m")
+        if build_month is not None and build_month >= cur_month:
+            return False  # already current
+
+        url = f"https://download.db-ip.com/free/dbip-city-lite-{cur_month}.mmdb.gz"
+        gz_path = GEOIP_DB.with_suffix(".mmdb.gz")
+        tmp_path = GEOIP_DB.with_suffix(".mmdb.tmp")
+        try:
+            print(f"[geoip] current build={build_month}, downloading {url}", file=sys.stderr)
+            req = urllib.request.Request(url, headers={"User-Agent": "hermes-beszel-geoip-updater"})
+            with urllib.request.urlopen(req, timeout=180) as resp, open(gz_path, "wb") as f:
+                shutil.copyfileobj(resp, f)
+            with gzip.open(gz_path, "rb") as fi, open(tmp_path, "wb") as fo:
+                shutil.copyfileobj(fi, fo)
+
+            # Validate: must open and be for the current month (or newer).
+            import maxminddb
+            r = maxminddb.open_database(str(tmp_path))
+            new_month = datetime.fromtimestamp(r.metadata().build_epoch, timezone.utc).strftime("%Y-%m")
+            r.close()
+            if new_month < cur_month:
+                print(f"[geoip] downloaded build {new_month} still older than {cur_month}, skip", file=sys.stderr)
+                tmp_path.unlink(missing_ok=True)
+                return False
+
+            # Backup old then atomic replace.
+            if GEOIP_DB.exists():
+                shutil.copy2(GEOIP_DB, GEOIP_DB.with_suffix(".mmdb.bak"))
+            os.replace(tmp_path, GEOIP_DB)
+            self.reload_geo()
+            print(f"[geoip] updated to build {new_month}", file=sys.stderr)
+            return True
+        except Exception as e:
+            print(f"[geoip] update failed: {e}", file=sys.stderr)
+            tmp_path.unlink(missing_ok=True)
+            return False
+        finally:
+            gz_path.unlink(missing_ok=True)
+
     def rotate_events(self, keep_days: int = 90) -> int:
         """Delete events older than keep_days. Returns number of rows deleted."""
         cutoff = datetime.now(timezone.utc).isoformat()[:10]  # YYYY-MM-DD
@@ -500,26 +578,40 @@ class Collector:
         def run_rotate():
             while True:
                 now = datetime.now(timezone.utc)
-                # next 03:00
+                # next 03:00 (use timedelta so month-end day+1 doesn't overflow)
                 target = now.replace(hour=3, minute=0, second=0, microsecond=0)
-                if now.hour >= 3:
-                    target = target.replace(day=target.day + 1)
+                if now >= target:
+                    target = target + timedelta(days=1)
                 wait = (target - now).total_seconds()
                 time.sleep(max(wait, 60))
                 self.rotate_events(keep_days=90)
+
+        # GeoIP auto-update: check daily, download only when a newer month build exists.
+        # First check 60s after boot so startup isn't blocked by a 60MB download.
+        def run_geoip_update():
+            time.sleep(60)
+            while True:
+                try:
+                    self.update_geoip_db()
+                except Exception as e:
+                    print(f"[geoip] update error: {e}", file=sys.stderr)
+                time.sleep(24 * 3600)
 
         t1 = threading.Thread(target=run_f2b, daemon=True)
         t2 = threading.Thread(target=run_nginx, daemon=True)
         t3 = threading.Thread(target=run_auth, daemon=True)
         t4 = threading.Thread(target=run_rotate, daemon=True)
+        t5 = threading.Thread(target=run_geoip_update, daemon=True)
         t1.start()
         t2.start()
         t3.start()
         t4.start()
+        t5.start()
         t1.join()
         t2.join()
         t3.join()
         t4.join()
+        t5.join()
 
 
 # ------------------------------------------------------------------ main
