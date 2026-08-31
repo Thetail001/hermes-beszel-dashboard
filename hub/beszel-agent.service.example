@@ -1,0 +1,11 @@
+[Unit]
+Description=Beszel agent (my-server)
+After=network.target beszel-hub.service
+
+[Service]
+ExecStart=/usr/local/bin/beszel-agent -u http://127.0.0.1:8090 -t GENERATE_A_TOKEN_IN_THE_HUB_UI -k "ssh-ed25519 ssh-ed25519 AAAA...paste-agent-host-public-key..."
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

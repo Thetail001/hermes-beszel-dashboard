@@ -1,0 +1,13 @@
+[Unit]
+Description=Beszel monitoring hub (loopback only)
+After=network.target
+
+[Service]
+User=beszel
+ExecStart=/usr/local/bin/beszel serve --http=127.0.0.1:8090
+WorkingDirectory=/opt/beszel
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
