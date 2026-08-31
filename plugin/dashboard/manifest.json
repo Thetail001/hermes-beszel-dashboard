@@ -8,6 +8,6 @@
     "path": "/beszel",
     "position": "end"
   },
-  "entry": "dist/index.html",
+  "entry": "dist/loader.js",
   "api": "plugin_api.py"
 }
