@@ -1,15 +1,17 @@
-"""beszel plugin API: PocketBase 反代层。
+"""beszel plugin API: PocketBase 反代层 + security events API.
 
 浏览器只认 Hermes dashboard 会话；本模块持有 beszel superuser token，
 把 /api/plugins/beszel/pb/* 转发到 127.0.0.1:8090 的 PocketBase。
-用户不需要 beszel 账号——登录 beszel 即可看面板。
+同时暴露 /api/plugins/beszel/security/* 查询安全事件。
 """
 import asyncio
 import json
 import re
+import sqlite3
 import time
 import urllib.request
 import urllib.error
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Request, HTTPException
@@ -146,3 +148,310 @@ async def auto_auth():
     if not d.get("token"):
         raise HTTPException(502, "no token")
     return {"token": d["token"], "record": d.get("record", {})}
+
+
+# ---------------------------------------------------------------- security
+SEC_DB = Path("/root/hermes-workspace/reports/security-events.db")
+
+
+def _sec_db() -> sqlite3.Connection:
+    conn = sqlite3.connect(str(SEC_DB))
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@router.get("/security/events")
+async def security_events(
+    limit: int = 50,
+    before: str = "",
+    jail: str = "",
+    ip: str = "",
+    type: str = "",
+):
+    """Cursor-paginated security events.
+
+    Query params:
+      limit:  page size (max 200)
+      before: ISO timestamp cursor (events older than this)
+      jail:   filter by fail2ban jail
+      ip:     filter by source IP
+      type:   filter by event_type (ban|unban|attack|scan)
+    """
+    limit = min(limit, 200)
+    sql = "SELECT * FROM security_events WHERE 1=1"
+    params: list = []
+    if before:
+        sql += " AND ts < ?"
+        params.append(before)
+    if jail:
+        sql += " AND jail = ?"
+        params.append(jail)
+    if ip:
+        sql += " AND src_ip = ?"
+        params.append(ip)
+    if type:
+        sql += " AND event_type = ?"
+        params.append(type)
+    sql += " ORDER BY ts DESC LIMIT ?"
+    params.append(limit)
+
+    conn = _sec_db()
+    try:
+        rows = conn.execute(sql, params).fetchall()
+        return {
+            "items": [dict(r) for r in rows],
+            "has_more": len(rows) == limit,
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/security/bans/current")
+async def security_bans_current():
+    """Currently active bans (unbanned_at IS NULL)."""
+    conn = _sec_db()
+    try:
+        rows = conn.execute(
+            "SELECT * FROM security_bans WHERE unbanned_at IS NULL "
+            "ORDER BY banned_at DESC"
+        ).fetchall()
+        return {"items": [dict(r) for r in rows]}
+    finally:
+        conn.close()
+
+
+@router.get("/security/stats/summary")
+async def security_stats_summary(period: str = "24h"):
+    """Aggregate stats for dashboard cards.
+
+    period: 24h | 7d | 30d
+    """
+    hours = {"24h": 24, "7d": 168, "30d": 720}.get(period, 24)
+    conn = _sec_db()
+    try:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM security_events "
+            "WHERE ts > datetime('now', ?)",
+            (f"-{hours} hours",),
+        ).fetchone()[0]
+        bans = conn.execute(
+            "SELECT COUNT(*) FROM security_bans WHERE unbanned_at IS NULL"
+        ).fetchone()[0]
+        ips = conn.execute(
+            "SELECT COUNT(DISTINCT src_ip) FROM security_events "
+            "WHERE ts > datetime('now', ?)",
+            (f"-{hours} hours",),
+        ).fetchone()[0]
+        by_type = {
+            r[0]: r[1]
+            for r in conn.execute(
+                "SELECT event_type, COUNT(*) FROM security_events "
+                "WHERE ts > datetime('now', ?) GROUP BY event_type",
+                (f"-{hours} hours",),
+            )
+        }
+        by_jail = {
+            r[0]: r[1]
+            for r in conn.execute(
+                "SELECT jail, COUNT(*) FROM security_events "
+                "WHERE ts > datetime('now', ?) AND jail IS NOT NULL "
+                "GROUP BY jail",
+                (f"-{hours} hours",),
+            )
+        }
+        return {
+            "period": period,
+            "total_events": total,
+            "active_bans": bans,
+            "unique_ips": ips,
+            "by_type": by_type,
+            "by_jail": by_jail,
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/security/attackers")
+async def security_attackers(
+    period: str = "7d",
+    start: str = "",
+    end: str = "",
+    type: str = "",
+    country: str = "",
+    ip: str = "",
+    sort: str = "recent",
+    limit: int = 100,
+):
+    """Aggregated attacker cards for Level 1 view.
+
+    Query params:
+      period:  24h | 7d | 30d | custom (use start/end instead)
+      start:   ISO datetime (overrides period)
+      end:     ISO datetime (overrides period)
+      type:    filter by event_type
+      country: filter by country code
+      ip:      filter by source IP
+      sort:    recent | count | first_seen
+      limit:   max results
+    """
+    limit = min(limit, 500)
+    conn = _sec_db()
+    try:
+        # Build time filter
+        if start and end:
+            time_cond = "ts >= ? AND ts <= ?"
+            params = [start, end]
+        else:
+            hours = {"24h": 24, "7d": 168, "30d": 720}.get(period, 168)
+            time_cond = "ts > datetime('now', ?)"
+            params = [f"-{hours} hours"]
+
+        # Additional filters
+        filters = ""
+        if type:
+            filters += " AND event_type = ?"
+            params.append(type)
+        if country:
+            filters += " AND country = ?"
+            params.append(country)
+        if ip:
+            filters += " AND src_ip = ?"
+            params.append(ip)
+
+        # Sort mapping
+        sort_map = {
+            "recent": "last_seen DESC",
+            "count": "total_events DESC",
+            "first_seen": "first_seen ASC",
+        }
+        order = sort_map.get(sort, "last_seen DESC")
+
+        sql = f"""
+            SELECT
+                src_ip,
+                country,
+                lat,
+                lon,
+                COUNT(*) as total_events,
+                MAX(ts) as last_seen,
+                MIN(ts) as first_seen,
+                GROUP_CONCAT(DISTINCT event_type) as types
+            FROM security_events
+            WHERE {time_cond} {filters}
+            GROUP BY src_ip
+            ORDER BY {order}
+            LIMIT ?
+        """
+        params.append(limit)
+
+        rows = conn.execute(sql, params).fetchall()
+        return {
+            "items": [dict(r) for r in rows],
+            "count": len(rows),
+        }
+    finally:
+        conn.close()
+
+
+@router.get("/security/export")
+async def security_export(
+    period: str = "7d",
+    start: str = "",
+    end: str = "",
+    type: str = "",
+    country: str = "",
+    ip: str = "",
+    sort: str = "recent",
+):
+    """Export filtered events as JSON download."""
+    conn = _sec_db()
+    try:
+        if start and end:
+            time_cond = "ts >= ? AND ts <= ?"
+            params = [start, end]
+        else:
+            hours = {"24h": 24, "7d": 168, "30d": 720}.get(period, 168)
+            time_cond = "ts > datetime('now', ?)"
+            params = [f"-{hours} hours"]
+
+        filters = ""
+        if type:
+            filters += " AND event_type = ?"
+            params.append(type)
+        if country:
+            filters += " AND country = ?"
+            params.append(country)
+        if ip:
+            filters += " AND src_ip = ?"
+            params.append(ip)
+
+        sort_map = {
+            "recent": "ts DESC",
+            "count": "count DESC",
+            "first_seen": "ts ASC",
+        }
+        order = sort_map.get(sort, "ts DESC")
+
+        sql = f"""
+            SELECT * FROM security_events
+            WHERE {time_cond} {filters}
+            ORDER BY {order}
+            LIMIT 10000
+        """
+        rows = conn.execute(sql, params).fetchall()
+        items = [dict(r) for r in rows]
+
+        from fastapi.responses import JSONResponse
+        return JSONResponse(
+            content={"items": items, "count": len(items), "exported_at": datetime.now(timezone.utc).isoformat()},
+            headers={
+                "Content-Disposition": f"attachment; filename=security-events-{datetime.now().strftime('%Y%m%d-%H%M%S')}.json"
+            },
+        )
+    finally:
+        conn.close()
+
+
+@router.post("/security/rotate")
+async def security_rotate(keep_days: int = 90):
+    """Manually trigger log rotation."""
+    conn = _sec_db()
+    try:
+        cur = conn.execute(
+            "DELETE FROM security_events WHERE julianday(ts) < julianday('now', ?)",
+            (f"-{keep_days} days",),
+        )
+        conn.commit()
+        deleted = cur.rowcount
+        return {"ok": True, "deleted": deleted, "keep_days": keep_days}
+    finally:
+        conn.close()
+
+
+@router.get("/security/ip/{ip}")
+async def security_ip_profile(ip: str):
+    """IP profile: all events + ban history + geo."""
+    conn = _sec_db()
+    try:
+        events = conn.execute(
+            "SELECT * FROM security_events WHERE src_ip = ? "
+            "ORDER BY ts DESC LIMIT 100",
+            (ip,),
+        ).fetchall()
+        bans = conn.execute(
+            "SELECT * FROM security_bans WHERE ip = ? "
+            "ORDER BY banned_at DESC",
+            (ip,),
+        ).fetchall()
+        geo = conn.execute(
+            "SELECT * FROM geo_cache WHERE ip = ?",
+            (ip,),
+        ).fetchone()
+        return {
+            "ip": ip,
+            "events": [dict(r) for r in events],
+            "bans": [dict(r) for r in bans],
+            "geo": dict(geo) if geo else None,
+        }
+    finally:
+        conn.close()

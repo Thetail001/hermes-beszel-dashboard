@@ -453,6 +453,19 @@ class Collector:
                 if ev:
                     yield ev
 
+    def rotate_events(self, keep_days: int = 90) -> int:
+        """Delete events older than keep_days. Returns number of rows deleted."""
+        cutoff = datetime.now(timezone.utc).isoformat()[:10]  # YYYY-MM-DD
+        # SQLite datetime comparison: use modified Julian day
+        cur = self.conn.execute(
+            "DELETE FROM security_events WHERE julianday(ts) < julianday('now', ?)",
+            (f"-{keep_days} days",),
+        )
+        self.conn.commit()
+        deleted = cur.rowcount
+        print(f"[rotate] deleted {deleted} events older than {keep_days} days", file=sys.stderr)
+        return deleted
+
     def run(self):
         import threading
         print(f"[collector] starting, db={DB_PATH}, machine={MACHINE_ID}", file=sys.stderr)
@@ -472,15 +485,30 @@ class Collector:
                 print(f"[auth] {ev['event_type']} {ev['src_ip']}", file=sys.stderr)
                 self.handle_auth_event(ev)
 
+        # Auto-rotate: once per day at 03:00 UTC
+        def run_rotate():
+            while True:
+                now = datetime.now(timezone.utc)
+                # next 03:00
+                target = now.replace(hour=3, minute=0, second=0, microsecond=0)
+                if now.hour >= 3:
+                    target = target.replace(day=target.day + 1)
+                wait = (target - now).total_seconds()
+                time.sleep(max(wait, 60))
+                self.rotate_events(keep_days=90)
+
         t1 = threading.Thread(target=run_f2b, daemon=True)
         t2 = threading.Thread(target=run_nginx, daemon=True)
         t3 = threading.Thread(target=run_auth, daemon=True)
+        t4 = threading.Thread(target=run_rotate, daemon=True)
         t1.start()
         t2.start()
         t3.start()
+        t4.start()
         t1.join()
         t2.join()
         t3.join()
+        t4.join()
 
 
 # ------------------------------------------------------------------ main

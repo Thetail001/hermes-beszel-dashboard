@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
 import { geoEqualEarth, geoPath } from "d3-geo"
 import { feature } from "topojson-client"
 
@@ -56,6 +57,27 @@ interface Machine {
 	lon?: number
 }
 
+interface Attacker {
+	src_ip: string
+	country: string | null
+	lat: number | null
+	lon: number | null
+	total_events: number
+	last_seen: string
+	first_seen: string
+	types: string
+}
+
+interface FilterState {
+	period: string
+	start: string
+	end: string
+	type: string
+	country: string
+	ip: string
+	sort: string
+}
+
 // ---------------------------------------------------------------- helpers
 const EVENT_COLORS: Record<string, string> = {
 	ban: "bg-red-500/10 text-red-500 border-red-500/20",
@@ -85,29 +107,29 @@ function timeAgo(iso: string): string {
 	return `${Math.floor(h / 24)}d ago`
 }
 
-/**
- * Aggregate the raw event stream by (event_type, src_ip).
- * Rows are sorted by most recent activity; each row shows the summed count,
- * the latest uri/jail/country seen, and the latest timestamp.
- */
-function aggregateEvents(events: SecurityEvent[]): SecurityEvent[] {
-	const map = new Map<string, SecurityEvent>()
-	for (const ev of events) {
-		const key = `${ev.event_type}|${ev.src_ip}`
-		const existing = map.get(key)
-		if (existing) {
-			existing.count += ev.count || 1
-			if (ev.ts > existing.ts) {
-				existing.ts = ev.ts
-				if (ev.uri) existing.uri = ev.uri
-				if (ev.jail) existing.jail = ev.jail
-				if (ev.country) existing.country = ev.country
-			}
-		} else {
-			map.set(key, { ...ev, count: ev.count || 1 })
-		}
+function buildQueryString(f: FilterState): string {
+	const p = new URLSearchParams()
+	if (f.period && f.period !== "custom") p.set("period", f.period)
+	if (f.start) p.set("start", f.start)
+	if (f.end) p.set("end", f.end)
+	if (f.type) p.set("type", f.type)
+	if (f.country) p.set("country", f.country)
+	if (f.ip) p.set("ip", f.ip)
+	if (f.sort) p.set("sort", f.sort)
+	return p.toString()
+}
+
+function parseQueryInput(input: string): Partial<FilterState> {
+	const out: Partial<FilterState> = {}
+	const parts = input.trim().split(/\s+/)
+	for (const part of parts) {
+		const [key, val] = part.split(":", 2)
+		if (!val) continue
+		if (key === "ip") out.ip = val
+		if (key === "type") out.type = val
+		if (key === "country") out.country = val
 	}
-	return [...map.values()].sort((a, b) => (a.ts < b.ts ? 1 : -1))
+	return out
 }
 
 // ---------------------------------------------------------------- sub-components
@@ -399,15 +421,11 @@ function AttackMap({ events, machines, effectLevel, fusionMode }: {
 					const fps = frameCount / ((now - lastFpsCheck) / 1000)
 					if (fps < 45 && !degraded) {
 						degraded = true
-						// Auto-degrade: reduce particle count
 						console.warn("[AttackMap] FPS below 45, degrading effects")
 					}
 					frameCount = 0
 					lastFpsCheck = now
 				}
-
-				// Redraw dynamic elements only (particles)
-				// For now, full redraw is fast enough with <50 lines
 			}
 			animId = requestAnimationFrame(animate)
 		}
@@ -424,27 +442,109 @@ function AttackMap({ events, machines, effectLevel, fusionMode }: {
 	)
 }
 
+/** Collapsible rotation settings card */
+function RotationSettings({ onRotate }: { onRotate: (days: number) => void }) {
+	const [open, setOpen] = useState(false)
+	const [keepDays, setKeepDays] = useState(90)
+	const [rotating, setRotating] = useState(false)
+	const [lastResult, setLastResult] = useState<string | null>(null)
+
+	const handleRotate = async () => {
+		setRotating(true)
+		try {
+			const r = await fetch(`/api/plugins/beszel/security/rotate?keep_days=${keepDays}`, { method: "POST" })
+			const d = await r.json()
+			setLastResult(`Deleted ${d.deleted} events older than ${keepDays} days`)
+			onRotate(keepDays)
+		} catch {
+			setLastResult("Rotation failed")
+		} finally {
+			setRotating(false)
+		}
+	}
+
+	return (
+		<Card>
+			<CardHeader className="cursor-pointer select-none" onClick={() => setOpen(!open)}>
+				<CardTitle className="flex items-center gap-2 text-sm">
+					<span className="text-muted-foreground">{open ? "▼" : "▶"}</span>
+					<Trans>Log Rotation</Trans>
+				</CardTitle>
+			</CardHeader>
+			{open && (
+				<CardContent className="space-y-3">
+					<div className="flex items-center gap-2">
+						<Label className="text-xs"><Trans>Keep days</Trans></Label>
+						<Input
+							type="number"
+							value={keepDays}
+							onChange={(e) => setKeepDays(Number(e.target.value))}
+							className="h-7 w-20 text-xs"
+							min={1}
+							max={365}
+						/>
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-7 text-xs"
+							onClick={handleRotate}
+							disabled={rotating}
+						>
+							{rotating ? "…" : "Rotate now"}
+						</Button>
+					</div>
+					{lastResult && <div className="text-xs text-muted-foreground">{lastResult}</div>}
+					<div className="text-xs text-muted-foreground">
+						<Trans>Auto-rotation runs daily at 03:00 UTC.</Trans>
+					</div>
+				</CardContent>
+			)}
+		</Card>
+	)
+}
+
 // ---------------------------------------------------------------- component
 export default function SecurityPage() {
+	// Data
 	const [events, setEvents] = useState<SecurityEvent[]>([])
+	const [attackers, setAttackers] = useState<Attacker[]>([])
 	const [bans, setBans] = useState<Ban[]>([])
 	const [summary, setSummary] = useState<Summary | null>(null)
 	const [machines, setMachines] = useState<Machine[]>([])
 	const [loading, setLoading] = useState(true)
+
+	// View state
 	const [effectLevel, setEffectLevel] = useState(2)
 	const [fusionMode, setFusionMode] = useState(false)
-	const [refreshInterval, setRefreshInterval] = useState(30) // seconds; 0 = off
-	const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
+	const [refreshInterval, setRefreshInterval] = useState(30)
+
+	// Filter state
+	const [filter, setFilter] = useState<FilterState>({
+		period: "7d",
+		start: "",
+		end: "",
+		type: "",
+		country: "",
+		ip: "",
+		sort: "recent",
+	})
+
+	// Query input
+	const [queryInput, setQueryInput] = useState("")
+
+	// Selected attacker for Level 2
+	const [selectedIp, setSelectedIp] = useState<string | null>(null)
 
 	// Load persisted view state
 	useEffect(() => {
 		const saved = localStorage.getItem("beszel-security-view")
 		if (saved) {
 			try {
-				const { effectLevel: el, fusionMode: fm, refreshInterval: ri } = JSON.parse(saved)
-				if (el !== undefined) setEffectLevel(el)
-				if (fm !== undefined) setFusionMode(fm)
-				if (ri !== undefined) setRefreshInterval(ri)
+				const parsed = JSON.parse(saved)
+				if (parsed.effectLevel !== undefined) setEffectLevel(parsed.effectLevel)
+				if (parsed.fusionMode !== undefined) setFusionMode(parsed.fusionMode)
+				if (parsed.refreshInterval !== undefined) setRefreshInterval(parsed.refreshInterval)
+				if (parsed.filter) setFilter((f) => ({ ...f, ...parsed.filter }))
 			} catch {}
 		}
 	}, [])
@@ -453,20 +553,23 @@ export default function SecurityPage() {
 	useEffect(() => {
 		localStorage.setItem(
 			"beszel-security-view",
-			JSON.stringify({ effectLevel, fusionMode, refreshInterval })
+			JSON.stringify({ effectLevel, fusionMode, refreshInterval, filter })
 		)
-	}, [effectLevel, fusionMode, refreshInterval])
+	}, [effectLevel, fusionMode, refreshInterval, filter])
 
 	const fetchData = () => {
 		setLoading(true)
+		const qs = buildQueryString(filter)
 		Promise.all([
-			fetch("/api/plugins/beszel/security/events?limit=50").then((r) => r.json()),
+			fetch(`/api/plugins/beszel/security/events?limit=50&${qs}`).then((r) => r.json()),
+			fetch(`/api/plugins/beszel/security/attackers?${qs}`).then((r) => r.json()),
 			fetch("/api/plugins/beszel/security/bans/current").then((r) => r.json()),
-			fetch("/api/plugins/beszel/security/stats/summary?period=24h").then((r) => r.json()),
+			fetch(`/api/plugins/beszel/security/stats/summary?period=${filter.period}`).then((r) => r.json()),
 			fetch("/api/plugins/beszel/pb/api/collections/systems/records").then((r) => r.json()),
 		])
-			.then(([ev, bn, sm, sys]) => {
+			.then(([ev, at, bn, sm, sys]) => {
 				setEvents(ev.items || [])
+				setAttackers(at.items || [])
 				setBans(bn.items || [])
 				setSummary(sm)
 				const machineList = (sys.items || []).map((s: any) => ({
@@ -480,15 +583,14 @@ export default function SecurityPage() {
 					lon: 8.6821,
 				}))
 				setMachines(machineList)
-				setLastRefresh(new Date())
 			})
 			.finally(() => setLoading(false))
 	}
 
-	// Initial load
+	// Initial load + filter changes
 	useEffect(() => {
 		fetchData()
-	}, [])
+	}, [filter])
 
 	// Auto-refresh polling
 	useEffect(() => {
@@ -497,17 +599,46 @@ export default function SecurityPage() {
 		return () => clearInterval(id)
 	}, [refreshInterval])
 
+	const handleQuerySubmit = () => {
+		const parsed = parseQueryInput(queryInput)
+		setFilter((f) => ({ ...f, ...parsed }))
+	}
+
+	const handleExport = () => {
+		const qs = buildQueryString(filter)
+		window.open(`/api/plugins/beszel/security/export?${qs}`, "_blank")
+	}
+
+	const handleRotate = (_days: number) => {
+		// Refresh data after rotation
+		fetchData()
+	}
+
+	// Filter bans by current filter
+	const filteredBans = filter.ip
+		? bans.filter((b) => b.ip === filter.ip)
+		: bans
+
+	// If an IP is selected, show Level 2
+	if (selectedIp) {
+		return (
+			<IpTimeline
+				ip={selectedIp}
+				onBack={() => setSelectedIp(null)}
+			/>
+		)
+	}
+
 	return (
 		<div className="space-y-4">
+			{/* Header */}
 			<div className="flex items-center justify-between">
 				<h1 className="text-2xl font-semibold tracking-tight">
 					<Trans>Security</Trans>
 				</h1>
 				<div className="flex items-center gap-4">
 					<div className="flex items-center gap-2">
-						<Label className="text-xs">
-							<Trans>Refresh</Trans>
-						</Label>
+						<Label className="text-xs"><Trans>Refresh</Trans></Label>
 						<select
 							value={refreshInterval}
 							onChange={(e) => setRefreshInterval(Number(e.target.value))}
@@ -519,26 +650,19 @@ export default function SecurityPage() {
 							<option value={60}>1m</option>
 							<option value={300}>5m</option>
 						</select>
-						<Button
-							variant="outline"
-							size="sm"
-							className="h-7 px-2 text-xs"
-							onClick={fetchData}
-							disabled={loading}
-						>
+						<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={fetchData} disabled={loading}>
 							{loading ? "…" : "↻"}
+						</Button>
+						<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={handleExport}>
+							<Trans>Export</Trans>
 						</Button>
 					</div>
 					<div className="flex items-center gap-2">
-						<Label htmlFor="fusion" className="text-xs">
-							<Trans>Fusion</Trans>
-						</Label>
+						<Label htmlFor="fusion" className="text-xs"><Trans>Fusion</Trans></Label>
 						<Switch id="fusion" checked={fusionMode} onCheckedChange={setFusionMode} />
 					</div>
 					<div className="flex items-center gap-2">
-						<Label className="text-xs">
-							<Trans>Effects</Trans>
-						</Label>
+						<Label className="text-xs"><Trans>Effects</Trans></Label>
 						<div className="flex gap-1">
 							{[0, 1, 2, 3].map((level) => (
 								<Button
@@ -556,26 +680,107 @@ export default function SecurityPage() {
 				</div>
 			</div>
 
-			{/* stats cards */}
+			{/* Filter bar */}
+			<Card>
+				<CardContent className="pt-4">
+					<div className="flex flex-wrap items-center gap-3">
+						{/* Query input */}
+						<div className="flex items-center gap-2">
+							<Input
+								placeholder="ip:1.2.3.4 type:ban country:NL"
+								value={queryInput}
+								onChange={(e) => setQueryInput(e.target.value)}
+								onKeyDown={(e) => e.key === "Enter" && handleQuerySubmit()}
+								className="h-8 w-64 text-xs"
+							/>
+							<Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleQuerySubmit}>
+								<Trans>Query</Trans>
+							</Button>
+						</div>
+
+						{/* Time period */}
+						<select
+							value={filter.period}
+							onChange={(e) => setFilter((f) => ({ ...f, period: e.target.value, start: "", end: "" }))}
+							className="h-8 rounded-md border bg-background px-2 text-xs"
+						>
+							<option value="24h">Last 24h</option>
+							<option value="7d">Last 7d</option>
+							<option value="30d">Last 30d</option>
+							<option value="custom">Custom</option>
+						</select>
+
+						{/* Custom date range */}
+						{filter.period === "custom" && (
+							<>
+								<Input
+									type="datetime-local"
+									value={filter.start}
+									onChange={(e) => setFilter((f) => ({ ...f, start: e.target.value }))}
+									className="h-8 text-xs"
+								/>
+								<span className="text-xs text-muted-foreground">to</span>
+								<Input
+									type="datetime-local"
+									value={filter.end}
+									onChange={(e) => setFilter((f) => ({ ...f, end: e.target.value }))}
+									className="h-8 text-xs"
+								/>
+							</>
+						)}
+
+						{/* Sort */}
+						<select
+							value={filter.sort}
+							onChange={(e) => setFilter((f) => ({ ...f, sort: e.target.value }))}
+							className="h-8 rounded-md border bg-background px-2 text-xs"
+						>
+							<option value="recent">Most recent</option>
+							<option value="count">Most active</option>
+							<option value="first_seen">Newest first</option>
+						</select>
+
+						{/* Active filter badges */}
+						{(filter.type || filter.country || filter.ip) && (
+							<div className="flex items-center gap-1">
+								{filter.type && (
+									<Badge variant="secondary" className="text-xs">
+										type:{filter.type}
+										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, type: "" }))}>×</button>
+									</Badge>
+								)}
+								{filter.country && (
+									<Badge variant="secondary" className="text-xs">
+										country:{filter.country}
+										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, country: "" }))}>×</button>
+									</Badge>
+								)}
+								{filter.ip && (
+									<Badge variant="secondary" className="text-xs">
+										ip:{filter.ip}
+										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, ip: "" }))}>×</button>
+									</Badge>
+								)}
+							</div>
+						)}
+					</div>
+				</CardContent>
+			</Card>
+
+			{/* Stats cards */}
 			<div className="grid gap-4 md:grid-cols-4">
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">
-							<Trans>Active Bans</Trans>
-						</CardTitle>
+						<CardTitle className="text-sm font-medium"><Trans>Active Bans</Trans></CardTitle>
 					</CardHeader>
 					<CardContent>
 						<div className="text-2xl font-bold">{summary?.active_bans ?? "-"}</div>
-						<p className="text-xs text-muted-foreground">
-							<Trans>Currently banned IPs</Trans>
-						</p>
+						<p className="text-xs text-muted-foreground"><Trans>Currently banned IPs</Trans></p>
 					</CardContent>
 				</Card>
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">
-							<Trans>24h Events</Trans>
-						</CardTitle>
+						<CardTitle className="text-sm font-medium"><Trans>Events</Trans></CardTitle>
 					</CardHeader>
 					<CardContent>
 						<div className="text-2xl font-bold">{summary?.total_events ?? "-"}</div>
@@ -584,22 +789,16 @@ export default function SecurityPage() {
 				</Card>
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">
-							<Trans>Unique IPs</Trans>
-						</CardTitle>
+						<CardTitle className="text-sm font-medium"><Trans>Unique IPs</Trans></CardTitle>
 					</CardHeader>
 					<CardContent>
 						<div className="text-2xl font-bold">{summary?.unique_ips ?? "-"}</div>
-						<p className="text-xs text-muted-foreground">
-							<Trans>Distinct source IPs in 24h</Trans>
-						</p>
+						<p className="text-xs text-muted-foreground"><Trans>Distinct source IPs</Trans></p>
 					</CardContent>
 				</Card>
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium">
-							<Trans>Event Types</Trans>
-						</CardTitle>
+						<CardTitle className="text-sm font-medium"><Trans>Event Types</Trans></CardTitle>
 					</CardHeader>
 					<CardContent>
 						<TypeDonut byType={summary?.by_type || {}} />
@@ -607,33 +806,27 @@ export default function SecurityPage() {
 				</Card>
 			</div>
 
-			{/* attack map */}
+			{/* Attack map */}
 			<Card>
 				<CardHeader>
-					<CardTitle>
-						<Trans>Attack Map</Trans>
-					</CardTitle>
+					<CardTitle><Trans>Attack Map</Trans></CardTitle>
 				</CardHeader>
 				<CardContent>
 					<AttackMap events={events} machines={machines} effectLevel={effectLevel} fusionMode={fusionMode} />
 				</CardContent>
 			</Card>
 
-			{/* current bans */}
+			{/* Active bans */}
 			<Card>
 				<CardHeader>
-					<CardTitle>
-						<Trans>Active Bans</Trans>
-					</CardTitle>
+					<CardTitle><Trans>Active Bans</Trans></CardTitle>
 				</CardHeader>
 				<CardContent>
-					{bans.length === 0 ? (
-						<div className="py-8 text-center text-muted-foreground">
-							<Trans>No active bans.</Trans>
-						</div>
+					{filteredBans.length === 0 ? (
+						<div className="py-8 text-center text-muted-foreground"><Trans>No active bans.</Trans></div>
 					) : (
 						<div className="space-y-1">
-							{bans.map((b) => (
+							{filteredBans.map((b) => (
 								<div key={b.id} className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
 									<Badge variant="destructive">{b.jail}</Badge>
 									<span className="font-mono">{b.ip}</span>
@@ -645,50 +838,145 @@ export default function SecurityPage() {
 				</CardContent>
 			</Card>
 
-			{/* event stream */}
+			{/* Attackers (Level 1) */}
 			<Card>
 				<CardHeader>
-					<CardTitle>
-						<Trans>Event Stream</Trans>
-					</CardTitle>
+					<CardTitle><Trans>Attackers</Trans></CardTitle>
 				</CardHeader>
 				<CardContent>
 					{loading ? (
-						<div className="py-8 text-center text-muted-foreground">
-							<Trans>Loading...</Trans>
+						<div className="py-8 text-center text-muted-foreground"><Trans>Loading...</Trans></div>
+					) : attackers.length === 0 ? (
+						<div className="py-8 text-center text-muted-foreground"><Trans>No attackers in this period.</Trans></div>
+					) : (
+						<div className="space-y-2">
+							{attackers.map((a) => (
+								<div
+									key={a.src_ip}
+									className="cursor-pointer rounded-md border p-3 transition-colors hover:bg-muted/50"
+									onClick={() => setSelectedIp(a.src_ip)}
+								>
+									<div className="flex items-center gap-3">
+										<span className="font-mono text-sm font-semibold">{a.src_ip}</span>
+										{a.country && <Badge variant="outline" className="text-xs">{a.country}</Badge>}
+										<span className="text-xs text-muted-foreground">{a.total_events} events</span>
+										<span className="ml-auto text-xs text-muted-foreground">{timeAgo(a.last_seen)}</span>
+									</div>
+									<div className="mt-2 flex flex-wrap gap-1">
+										{a.types.split(",").map((t) => (
+											<Badge key={t} className={`text-xs ${EVENT_COLORS[t] || ""}`}>
+												{t.replace("_", " ")}
+											</Badge>
+										))}
+									</div>
+								</div>
+							))}
 						</div>
+					)}
+				</CardContent>
+			</Card>
+
+			{/* Rotation settings */}
+			<RotationSettings onRotate={handleRotate} />
+		</div>
+	)
+}
+
+// ---------------------------------------------------------------- Level 2: IP Timeline
+function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
+	const [events, setEvents] = useState<SecurityEvent[]>([])
+	const [geo, setGeo] = useState<any>(null)
+	const [loading, setLoading] = useState(true)
+	const [hasMore, setHasMore] = useState(false)
+	const [cursor, setCursor] = useState<string | null>(null)
+
+	const fetchTimeline = (before?: string) => {
+		setLoading(true)
+		const url = before
+			? `/api/plugins/beszel/security/events?ip=${ip}&limit=50&before=${before}`
+			: `/api/plugins/beszel/security/events?ip=${ip}&limit=50`
+		fetch(url)
+			.then((r) => r.json())
+			.then((d) => {
+				if (before) {
+					setEvents((prev) => [...prev, ...(d.items || [])])
+				} else {
+					setEvents(d.items || [])
+				}
+				setHasMore(d.has_more || false)
+				if (d.items?.length > 0) {
+					setCursor(d.items[d.items.length - 1].ts)
+				}
+			})
+			.finally(() => setLoading(false))
+	}
+
+	useEffect(() => {
+		fetchTimeline()
+		// Also fetch geo info
+		fetch(`/api/plugins/beszel/security/ip/${ip}`)
+			.then((r) => r.json())
+			.then((d) => setGeo(d.geo))
+			.catch(() => {})
+	}, [ip])
+
+	// Group consecutive same-type events
+	const grouped: Array<SecurityEvent & { count: number }> = []
+	for (const ev of events) {
+		const last = grouped[grouped.length - 1]
+		if (last && last.event_type === ev.event_type && last.jail === ev.jail) {
+			last.count += ev.count || 1
+		} else {
+			grouped.push({ ...ev, count: ev.count || 1 })
+		}
+	}
+
+	return (
+		<div className="space-y-4">
+			<div className="flex items-center gap-4">
+				<Button variant="outline" size="sm" onClick={onBack}>
+					← <Trans>Back</Trans>
+				</Button>
+				<h1 className="text-2xl font-semibold tracking-tight font-mono">{ip}</h1>
+				{geo && (
+					<div className="text-sm text-muted-foreground">
+						{geo.country} {geo.asn} {geo.lat && geo.lon ? `(${geo.lat.toFixed(2)}, ${geo.lon.toFixed(2)})` : ""}
+					</div>
+				)}
+			</div>
+
+			<Card>
+				<CardHeader>
+					<CardTitle><Trans>Event Timeline</Trans></CardTitle>
+				</CardHeader>
+				<CardContent>
+					{loading && events.length === 0 ? (
+						<div className="py-8 text-center text-muted-foreground"><Trans>Loading...</Trans></div>
 					) : events.length === 0 ? (
-						<div className="py-8 text-center text-muted-foreground">
-							<Trans>No security events recorded.</Trans>
-						</div>
+						<div className="py-8 text-center text-muted-foreground"><Trans>No events for this IP.</Trans></div>
 					) : (
 						<div className="space-y-1">
-							{aggregateEvents(events).map((ev) => (
-								<div
-									key={ev.id}
-									className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm"
-								>
+							{grouped.map((ev, i) => (
+								<div key={i} className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
 									<Badge className={EVENT_COLORS[ev.event_type] || ""}>
 										{ev.event_type.replace("_", " ")}
 									</Badge>
-									<span className="font-mono">{ev.src_ip}</span>
-									{ev.country && (
-										<span className="text-xs text-muted-foreground">{ev.country}</span>
-									)}
-									{ev.jail && (
-										<span className="text-muted-foreground">[{ev.jail}]</span>
-									)}
-									{ev.uri && (
-										<span className="max-w-[200px] truncate text-muted-foreground">{ev.uri}</span>
-									)}
-									{ev.count > 1 && (
-										<span className="text-muted-foreground">×{ev.count}</span>
-									)}
-									<span className="ml-auto text-xs text-muted-foreground">
-										{timeAgo(ev.ts)}
-									</span>
+									{ev.jail && <span className="text-muted-foreground">[{ev.jail}]</span>}
+									{ev.uri && <span className="max-w-[200px] truncate text-muted-foreground">{ev.uri}</span>}
+									{ev.count > 1 && <span className="text-muted-foreground">×{ev.count}</span>}
+									<span className="ml-auto text-xs text-muted-foreground">{timeAgo(ev.ts)}</span>
 								</div>
 							))}
+							{hasMore && (
+								<Button
+									variant="outline"
+									className="w-full mt-2"
+									onClick={() => fetchTimeline(cursor!)}
+									disabled={loading}
+								>
+									{loading ? "…" : "Load more"}
+								</Button>
+							)}
 						</div>
 					)}
 				</CardContent>
