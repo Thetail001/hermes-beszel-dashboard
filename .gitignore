@@ -1,0 +1,7 @@
+node_modules/
+plugin/dashboard/dist/assets/
+plugin/dashboard/dist/index.html
+hub/beszel
+hub/beszel_data/
+*.db
+__pycache__/
