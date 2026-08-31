@@ -20,6 +20,8 @@ interface SecurityEvent {
 	ua: string | null
 	country: string | null
 	asn: string | null
+	lat: number | null
+	lon: number | null
 	raw_excerpt: string | null
 	count: number
 	burst: number
@@ -295,22 +297,22 @@ function AttackMap({ events, machines, effectLevel, fusionMode }: {
 
 		// Attack trajectories (recent events with GeoIP)
 		const attackEvents = events
-			.filter((ev) => ev.country && ev.event_type !== "unban" && ev.event_type !== "auth_success")
+			.filter((ev) => ev.lat && ev.lon && ev.event_type !== "unban" && ev.event_type !== "auth_success")
 			.slice(0, effectLevel >= 3 ? 50 : 20)
 
 		for (const ev of attackEvents) {
-			// Source: use country centroid (simplified)
-			// In real impl we'd have lat/lon per IP from GeoIP
-			const srcLat = 0, srcLon = 0 // placeholder
-			const [sx, sy] = projection([srcLon, srcLat]) || [0, 0]
+			// Source: real GeoIP lat/lon
+			const [sx, sy] = projection([ev.lon!, ev.lat!]) || [0, 0]
 
 			// Target: first machine or center
 			const targetId = fusionMode ? Object.keys(machinePositions)[0] : machines[0]?.id
 			const [tx, ty] = targetId ? machinePositions[targetId] || [width / 2, height / 2] : [width / 2, height / 2]
 
-			// Bezier curve
-			const midX = (sx + tx) / 2 + (Math.random() - 0.5) * 100
-			const midY = (sy + ty) / 2 - 50
+			// Bezier curve with slight arc based on distance
+			const dist = Math.sqrt((tx - sx) ** 2 + (ty - sy) ** 2)
+			const curvature = Math.min(dist * 0.3, 80)
+			const midX = (sx + tx) / 2 + (Math.random() - 0.5) * curvature
+			const midY = (sy + ty) / 2 - curvature * 0.5
 
 			ctx.strokeStyle = TYPE_COLORS[ev.event_type] || "#666"
 			ctx.lineWidth = effectLevel >= 3 ? 2 : 1
@@ -321,9 +323,15 @@ function AttackMap({ events, machines, effectLevel, fusionMode }: {
 			ctx.stroke()
 			ctx.globalAlpha = 1
 
-			// Particle head
+			// Source dot
+			ctx.fillStyle = TYPE_COLORS[ev.event_type] || "#666"
+			ctx.beginPath()
+			ctx.arc(sx, sy, 3, 0, Math.PI * 2)
+			ctx.fill()
+
+			// Particle head (Level 3)
 			if (effectLevel >= 3) {
-				const t = (Date.now() / 1000) % 1
+				const t = (Date.now() / 1000 + ev.id * 0.1) % 1
 				const px = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * midX + t * t * tx
 				const py = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * midY + t * t * ty
 				ctx.fillStyle = "#fff"
