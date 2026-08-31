@@ -85,6 +85,31 @@ function timeAgo(iso: string): string {
 	return `${Math.floor(h / 24)}d ago`
 }
 
+/**
+ * Aggregate the raw event stream by (event_type, src_ip).
+ * Rows are sorted by most recent activity; each row shows the summed count,
+ * the latest uri/jail/country seen, and the latest timestamp.
+ */
+function aggregateEvents(events: SecurityEvent[]): SecurityEvent[] {
+	const map = new Map<string, SecurityEvent>()
+	for (const ev of events) {
+		const key = `${ev.event_type}|${ev.src_ip}`
+		const existing = map.get(key)
+		if (existing) {
+			existing.count += ev.count || 1
+			if (ev.ts > existing.ts) {
+				existing.ts = ev.ts
+				if (ev.uri) existing.uri = ev.uri
+				if (ev.jail) existing.jail = ev.jail
+				if (ev.country) existing.country = ev.country
+			}
+		} else {
+			map.set(key, { ...ev, count: ev.count || 1 })
+		}
+	}
+	return [...map.values()].sort((a, b) => (a.ts < b.ts ? 1 : -1))
+}
+
 // ---------------------------------------------------------------- sub-components
 /** Donut chart: event type distribution */
 function TypeDonut({ byType }: { byType: Record<string, number> }) {
@@ -595,7 +620,7 @@ export default function SecurityPage() {
 						</div>
 					) : (
 						<div className="space-y-1">
-							{events.map((ev) => (
+							{aggregateEvents(events).map((ev) => (
 								<div
 									key={ev.id}
 									className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm"

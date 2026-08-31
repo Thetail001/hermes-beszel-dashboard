@@ -10,6 +10,7 @@ Phase 2: nginx attack requests (4xx/5xx + suspicious UA).
 Phase 3: auth.log sshd failed logins.
 """
 
+import ipaddress
 import json
 import re
 import sqlite3
@@ -27,6 +28,48 @@ NGINX_LOG = Path("/var/log/nginx/access.log")
 AUTH_LOG = Path("/var/log/auth.log")
 GEOIP_DB = Path("/root/hermes-workspace/dbip-city-lite.mmdb")
 MACHINE_ID = "my-server-1"  # TODO: read from beszel systems table
+
+# ------------------------------------------------------------------ ip filter
+# Skip private/loopback/reserved ranges — they are never real attackers.
+# Standard library ipaddress.is_global handles: 127/8, 10/8, 172.16/12,
+# 192.168/16, 169.254/16, ::1, fc00::/7, etc.
+# NOTE: 100.64.0.0/10 (CGNAT/Tailscale) is *not* marked private by the stdlib,
+# and the operator's own VPN exit node (Amazon IAD 100.48.0.0/12) is publicly
+# routable — so trusted sources must be excluded via the explicit list below.
+
+# Trusted source IPs/CIDRs that belong to the operator (VPN exits, home, office).
+# Events from these are never attacks. Extend as needed.
+TRUSTED_SOURCES: tuple[str, ...] = (
+    "203.0.113.20",        # operator VPN exit (Amazon IAD)
+    # "203.0.113.0/24",      # example: home ISP static range
+)
+_TRUSTED_NETWORKS = []
+for _entry in TRUSTED_SOURCES:
+    try:
+        _TRUSTED_NETWORKS.append(ipaddress.ip_network(_entry, strict=False))
+    except ValueError:
+        pass
+
+
+def is_trusted_source(ip_str: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    return any(addr in net for net in _TRUSTED_NETWORKS)
+
+
+def is_public_ip(ip_str: str) -> bool:
+    """True only for globally routable IPs that are NOT trusted operator sources."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return False
+    if not addr.is_global:
+        return False
+    if addr in ipaddress.ip_network("100.64.0.0/10"):  # CGNAT (Tailscale etc.)
+        return False
+    return not is_trusted_source(ip_str)
 
 # ------------------------------------------------------------------ schema
 SCHEMA = """
@@ -132,6 +175,8 @@ def parse_f2b_line(line: str) -> Optional[dict]:
     m = F2B_RE.match(line.strip())
     if not m:
         return None
+    if not is_public_ip(m.group("ip")):
+        return None
     ts = datetime.strptime(m.group("ts"), "%Y-%m-%d %H:%M:%S")
     ts = ts.replace(tzinfo=timezone.utc).isoformat()
     return {
@@ -146,6 +191,8 @@ def parse_f2b_line(line: str) -> Optional[dict]:
 def parse_nginx_line(line: str) -> Optional[dict]:
     m = NGINX_RE.match(line.strip())
     if not m:
+        return None
+    if not is_public_ip(m.group("ip")):
         return None
 
     status = int(m.group("status"))
@@ -211,7 +258,7 @@ def parse_auth_line(line: str) -> Optional[dict]:
         pm = pattern.search(msg)
         if pm:
             ip = pm.group("ip")
-            if ip in ("127.0.0.1", "::1", "localhost"):
+            if not is_public_ip(ip):
                 return None
             return {
                 "ts": m.group("ts"),
