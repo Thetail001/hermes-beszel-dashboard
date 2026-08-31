@@ -104,7 +104,7 @@ NGINX_RE = re.compile(
 # paths that are always noise (skip even on 4xx)
 NGINX_SKIP_PATHS = {
     "/favicon.ico", "/robots.txt", "/static/", "/assets/", "/sitemap.xml",
-    "/login", "/api/status", "/api/health",
+    "/login", "/api/status", "/api/health", "/api/plugins/",
 }
 
 # suspicious path fragments → classify as "scan"
