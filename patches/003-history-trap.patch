@@ -1,5 +1,5 @@
---- a/internal/site/src/main.tsx	2026-08-31 06:00:32.094254900 +0000
-+++ b/internal/site/src/main.tsx	2026-08-31 10:05:43.872360238 +0000
+--- /tmp/beszel-study/main.tsx.orig	2026-08-31 06:00:32.094254900 +0000
++++ /tmp/beszel-study/beszel/internal/site/src/main.tsx	2026-08-31 10:05:43.872360238 +0000
 @@ -1,4 +1,18 @@
  import "./index.css"
 +// [beszel patch] "History trap": inside the Hermes plugin iframe the
