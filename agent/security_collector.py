@@ -24,6 +24,7 @@ from typing import Optional
 DB_PATH = Path("/root/hermes-workspace/reports/security-events.db")
 FAIL2BAN_LOG = Path("/var/log/fail2ban.log")
 NGINX_LOG = Path("/var/log/nginx/access.log")
+AUTH_LOG = Path("/var/log/auth.log")
 GEOIP_DB = Path("/root/hermes-workspace/dbip-city-lite.mmdb")
 MACHINE_ID = "my-server-1"  # TODO: read from beszel systems table
 
@@ -183,6 +184,40 @@ def parse_nginx_line(line: str) -> Optional[dict]:
     }
 
 
+# ------------------------------------------------------------------ auth.log sshd
+AUTH_RE = re.compile(
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+[+-]\d{2}:\d{2})\s+"
+    r"\S+\s+sshd\[\d+\]:\s+"
+    r"(?P<msg>.*)$"
+)
+
+AUTH_PATTERNS = [
+    (re.compile(r"Failed password for (?:invalid user )?\S+ from (?P<ip>\S+) port \d+"), "auth_fail"),
+    (re.compile(r"Invalid user \S+ from (?P<ip>\S+) port \d+"), "auth_fail"),
+    (re.compile(r"Connection closed by (?:invalid user \S+ )?(?P<ip>\S+) port \d+ \[preauth\]"), "auth_fail"),
+    (re.compile(r"Accepted password for \S+ from (?P<ip>\S+) port \d+"), "auth_success"),
+]
+
+def parse_auth_line(line: str) -> Optional[dict]:
+    m = AUTH_RE.match(line.strip())
+    if not m:
+        return None
+    msg = m.group("msg")
+    for pattern, event_type in AUTH_PATTERNS:
+        pm = pattern.search(msg)
+        if pm:
+            ip = pm.group("ip")
+            if ip in ("127.0.0.1", "::1", "localhost"):
+                return None
+            return {
+                "ts": m.group("ts"),
+                "event_type": event_type,
+                "src_ip": ip,
+                "raw_excerpt": line.strip()[:200],
+            }
+    return None
+
+
 # ------------------------------------------------------------------ collector
 class Collector:
     def __init__(self, db_path: Path):
@@ -309,6 +344,21 @@ class Collector:
         )
         self.conn.commit()
 
+    def handle_auth_event(self, ev: dict):
+        ip = ev["src_ip"]
+        if not self.should_sample(ip):
+            return
+
+        country, city = self.geo_lookup(ip)
+        self.conn.execute(
+            "INSERT INTO security_events "
+            "(ts, machine_id, event_type, src_ip, raw_excerpt, country, asn) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (ev["ts"], MACHINE_ID, ev["event_type"], ip,
+             ev["raw_excerpt"], country, city),
+        )
+        self.conn.commit()
+
     def tail_nginx(self, path: Path):
         """Tail nginx access.log, yield parsed attack/scan events."""
         with open(path, "r") as f:
@@ -319,6 +369,19 @@ class Collector:
                     time.sleep(0.5)
                     continue
                 ev = parse_nginx_line(line)
+                if ev:
+                    yield ev
+
+    def tail_auth(self, path: Path):
+        """Tail auth.log, yield parsed sshd auth events."""
+        with open(path, "r") as f:
+            f.seek(0, 2)
+            while True:
+                line = f.readline()
+                if not line:
+                    time.sleep(0.5)
+                    continue
+                ev = parse_auth_line(line)
                 if ev:
                     yield ev
 
@@ -346,17 +409,24 @@ class Collector:
                 self.handle_f2b_event(ev)
 
         def run_nginx():
-            nginx_log = Path("/var/log/nginx/access.log")
-            for ev in self.tail_nginx(nginx_log):
+            for ev in self.tail_nginx(NGINX_LOG):
                 print(f"[nginx] {ev['event_type']} {ev['src_ip']} {ev.get('uri', '')[:60]}", file=sys.stderr)
                 self.handle_nginx_event(ev)
 
+        def run_auth():
+            for ev in self.tail_auth(AUTH_LOG):
+                print(f"[auth] {ev['event_type']} {ev['src_ip']}", file=sys.stderr)
+                self.handle_auth_event(ev)
+
         t1 = threading.Thread(target=run_f2b, daemon=True)
         t2 = threading.Thread(target=run_nginx, daemon=True)
+        t3 = threading.Thread(target=run_auth, daemon=True)
         t1.start()
         t2.start()
+        t3.start()
         t1.join()
         t2.join()
+        t3.join()
 
 
 # ------------------------------------------------------------------ main
