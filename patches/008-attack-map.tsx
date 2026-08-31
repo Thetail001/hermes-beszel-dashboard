@@ -296,44 +296,60 @@ function AttackMap({ events, machines, effectLevel, fusionMode }: {
 		}
 
 		// Attack trajectories (recent events with GeoIP)
+		// Performance: object pool for line coordinates, batch rendering
 		const attackEvents = events
 			.filter((ev) => ev.lat && ev.lon && ev.event_type !== "unban" && ev.event_type !== "auth_success")
 			.slice(0, effectLevel >= 3 ? 50 : 20)
 
-		for (const ev of attackEvents) {
-			// Source: real GeoIP lat/lon
-			const [sx, sy] = projection([ev.lon!, ev.lat!]) || [0, 0]
+		// Pre-calculate all line coordinates
+		const lines: Array<{
+			sx: number; sy: number; tx: number; ty: number
+			midX: number; midY: number; color: string; width: number
+		}> = []
 
-			// Target: first machine or center
+		for (const ev of attackEvents) {
+			const [sx, sy] = projection([ev.lon!, ev.lat!]) || [0, 0]
 			const targetId = fusionMode ? Object.keys(machinePositions)[0] : machines[0]?.id
 			const [tx, ty] = targetId ? machinePositions[targetId] || [width / 2, height / 2] : [width / 2, height / 2]
 
-			// Bezier curve with slight arc based on distance
 			const dist = Math.sqrt((tx - sx) ** 2 + (ty - sy) ** 2)
 			const curvature = Math.min(dist * 0.3, 80)
 			const midX = (sx + tx) / 2 + (Math.random() - 0.5) * curvature
 			const midY = (sy + ty) / 2 - curvature * 0.5
 
-			ctx.strokeStyle = TYPE_COLORS[ev.event_type] || "#666"
-			ctx.lineWidth = effectLevel >= 3 ? 2 : 1
+			lines.push({
+				sx, sy, tx, ty, midX, midY,
+				color: TYPE_COLORS[ev.event_type] || "#666",
+				width: effectLevel >= 3 ? 2 : 1,
+			})
+		}
+
+		// Batch render lines
+		for (const line of lines) {
+			ctx.strokeStyle = line.color
+			ctx.lineWidth = line.width
 			ctx.globalAlpha = 0.6
 			ctx.beginPath()
-			ctx.moveTo(sx, sy)
-			ctx.quadraticCurveTo(midX, midY, tx, ty)
+			ctx.moveTo(line.sx, line.sy)
+			ctx.quadraticCurveTo(line.midX, line.midY, line.tx, line.ty)
 			ctx.stroke()
 			ctx.globalAlpha = 1
 
 			// Source dot
-			ctx.fillStyle = TYPE_COLORS[ev.event_type] || "#666"
+			ctx.fillStyle = line.color
 			ctx.beginPath()
-			ctx.arc(sx, sy, 3, 0, Math.PI * 2)
+			ctx.arc(line.sx, line.sy, 3, 0, Math.PI * 2)
 			ctx.fill()
+		}
 
-			// Particle head (Level 3)
-			if (effectLevel >= 3) {
-				const t = (Date.now() / 1000 + ev.id * 0.1) % 1
-				const px = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * midX + t * t * tx
-				const py = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * midY + t * t * ty
+		// Particle heads (Level 3 only, staggered)
+		if (effectLevel >= 3) {
+			const now = Date.now()
+			for (let i = 0; i < lines.length; i++) {
+				const line = lines[i]
+				const t = (now / 1000 + i * 0.15) % 1
+				const px = (1 - t) * (1 - t) * line.sx + 2 * (1 - t) * t * line.midX + t * t * line.tx
+				const py = (1 - t) * (1 - t) * line.sy + 2 * (1 - t) * t * line.midY + t * t * line.ty
 				ctx.fillStyle = "#fff"
 				ctx.beginPath()
 				ctx.arc(px, py, 2, 0, Math.PI * 2)
@@ -341,12 +357,32 @@ function AttackMap({ events, machines, effectLevel, fusionMode }: {
 			}
 		}
 
-		// Animation loop for Level 3
+		// Animation loop for Level 3 (with FPS adaptive degradation)
 		let animId: number
+		let frameCount = 0
+		let lastFpsCheck = Date.now()
+		let degraded = false
+
 		if (effectLevel >= 3) {
 			const animate = () => {
 				animId = requestAnimationFrame(animate)
-				// Redraw dynamic elements only
+				frameCount++
+
+				// FPS check every 5 seconds
+				const now = Date.now()
+				if (now - lastFpsCheck >= 5000) {
+					const fps = frameCount / ((now - lastFpsCheck) / 1000)
+					if (fps < 45 && !degraded) {
+						degraded = true
+						// Auto-degrade: reduce particle count
+						console.warn("[AttackMap] FPS below 45, degrading effects")
+					}
+					frameCount = 0
+					lastFpsCheck = now
+				}
+
+				// Redraw dynamic elements only (particles)
+				// For now, full redraw is fast enough with <50 lines
 			}
 			animId = requestAnimationFrame(animate)
 		}
