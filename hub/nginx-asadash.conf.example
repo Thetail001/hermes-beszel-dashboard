@@ -1,0 +1,37 @@
+# example.com —— hermes dashboard 反代
+# 两层防护：nginx basic auth（本文件）+ hermes 自身 auth
+# 插件资产/插件 API 豁免 Basic：iframe 子资源请求不重放凭据会触发
+# 浏览器 Basic 挑战弹窗（EventSource/fetch omit credentials 时）。
+# 这些路径由 hermes dashboard 自身会话保护，安全性不受影响。
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    server_name example.com;
+
+    ssl_certificate /etc/nginx/ssl/example.com.crt;
+    ssl_certificate_key /etc/nginx/ssl/example.com.key;
+
+    # 认证策略（2026-08-31 调整）：仅保留 hermes 自身会话认证。
+    # 原双层 Basic + hermes 导致 iframe/PWA 子资源（favicon、manifest、
+    # EventSource）不带 Basic 凭据时反复触发浏览器认证弹窗。
+    # hermes 登录（密码+会话 cookie+CSRF）防护强度不低于 Basic。
+    location / {
+        proxy_pass http://127.0.0.1:9119;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name example.com;
+    return 301 https://$host$request_uri;
+}
