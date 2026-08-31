@@ -433,25 +433,32 @@ export default function SecurityPage() {
 	const [loading, setLoading] = useState(true)
 	const [effectLevel, setEffectLevel] = useState(2)
 	const [fusionMode, setFusionMode] = useState(false)
+	const [refreshInterval, setRefreshInterval] = useState(30) // seconds; 0 = off
+	const [lastRefresh, setLastRefresh] = useState<Date | null>(null)
 
 	// Load persisted view state
 	useEffect(() => {
 		const saved = localStorage.getItem("beszel-security-view")
 		if (saved) {
 			try {
-				const { effectLevel: el, fusionMode: fm } = JSON.parse(saved)
+				const { effectLevel: el, fusionMode: fm, refreshInterval: ri } = JSON.parse(saved)
 				if (el !== undefined) setEffectLevel(el)
 				if (fm !== undefined) setFusionMode(fm)
+				if (ri !== undefined) setRefreshInterval(ri)
 			} catch {}
 		}
 	}, [])
 
 	// Persist view state
 	useEffect(() => {
-		localStorage.setItem("beszel-security-view", JSON.stringify({ effectLevel, fusionMode }))
-	}, [effectLevel, fusionMode])
+		localStorage.setItem(
+			"beszel-security-view",
+			JSON.stringify({ effectLevel, fusionMode, refreshInterval })
+		)
+	}, [effectLevel, fusionMode, refreshInterval])
 
-	useEffect(() => {
+	const fetchData = () => {
+		setLoading(true)
 		Promise.all([
 			fetch("/api/plugins/beszel/security/events?limit=50").then((r) => r.json()),
 			fetch("/api/plugins/beszel/security/bans/current").then((r) => r.json()),
@@ -462,22 +469,33 @@ export default function SecurityPage() {
 				setEvents(ev.items || [])
 				setBans(bn.items || [])
 				setSummary(sm)
-				// Map beszel systems to Machine format
 				const machineList = (sys.items || []).map((s: any) => ({
 					id: s.id,
 					name: s.name,
 					host: s.host,
 					status: s.status,
-					// GeoIP from security events or default
 					country: "DE",
 					city: "a German city",
 					lat: 50.1109,
 					lon: 8.6821,
 				}))
 				setMachines(machineList)
+				setLastRefresh(new Date())
 			})
 			.finally(() => setLoading(false))
+	}
+
+	// Initial load
+	useEffect(() => {
+		fetchData()
 	}, [])
+
+	// Auto-refresh polling
+	useEffect(() => {
+		if (refreshInterval <= 0) return
+		const id = setInterval(fetchData, refreshInterval * 1000)
+		return () => clearInterval(id)
+	}, [refreshInterval])
 
 	return (
 		<div className="space-y-4">
@@ -486,6 +504,31 @@ export default function SecurityPage() {
 					<Trans>Security</Trans>
 				</h1>
 				<div className="flex items-center gap-4">
+					<div className="flex items-center gap-2">
+						<Label className="text-xs">
+							<Trans>Refresh</Trans>
+						</Label>
+						<select
+							value={refreshInterval}
+							onChange={(e) => setRefreshInterval(Number(e.target.value))}
+							className="h-7 rounded-md border bg-background px-2 text-xs"
+						>
+							<option value={0}>Off</option>
+							<option value={10}>10s</option>
+							<option value={30}>30s</option>
+							<option value={60}>1m</option>
+							<option value={300}>5m</option>
+						</select>
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-7 px-2 text-xs"
+							onClick={fetchData}
+							disabled={loading}
+						>
+							{loading ? "…" : "↻"}
+						</Button>
+					</div>
 					<div className="flex items-center gap-2">
 						<Label htmlFor="fusion" className="text-xs">
 							<Trans>Fusion</Trans>
