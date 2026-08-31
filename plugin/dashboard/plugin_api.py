@@ -4,6 +4,7 @@
 把 /api/plugins/beszel/pb/* 转发到 127.0.0.1:8090 的 PocketBase。
 用户不需要 beszel 账号——登录 beszel 即可看面板。
 """
+import asyncio
 import json
 import re
 import time
@@ -87,9 +88,25 @@ async def pb_proxy(path: str, request: Request):
     except urllib.error.URLError as e:
         raise HTTPException(502, f"beszel hub unreachable: {e.reason}")
 
+    # SSE streams (PocketBase realtime): stream through unbuffered.
+    # beszel's EventSource reconnects if this breaks, but streaming keeps
+    # live updates working instead of a hard 501.
     if "text/event-stream" in ctype:
-        # SSE streams (realtime) — not supported through sync proxy yet
-        raise HTTPException(501, "SSE not proxied")
+        async def sse_gen():
+            loop = asyncio.get_event_loop()
+            req_fut = loop.run_in_executor(None, lambda: urllib.request.urlopen(fwd, timeout=600))
+            try:
+                resp = await req_fut
+                while True:
+                    chunk = await loop.run_in_executor(None, resp.read, 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+            finally:
+                pass
+        from fastapi.responses import StreamingResponse
+        return StreamingResponse(sse_gen(), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
     return Response(content=payload, status_code=status, media_type=ctype)
 
 
