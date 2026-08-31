@@ -10,13 +10,18 @@ Phase 2: nginx attack requests (4xx/5xx + suspicious UA).
 Phase 3: auth.log sshd failed logins.
 """
 
+import argparse
+import hashlib
 import ipaddress
 import json
+import os
 import re
 import sqlite3
 import sys
 import threading
 import time
+import urllib.error
+import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -133,6 +138,123 @@ def init_db(path: Path) -> sqlite3.Connection:
     conn.executescript(SCHEMA)
     conn.commit()
     return conn
+
+
+# ------------------------------------------------------------------ push mode
+class Pusher:
+    """Push events to the centre's /security/ingest instead of writing SQLite.
+
+    Continuous events (auth_fail/scan/attack) merge into fixed 60s windows keyed
+    by (type, ip, window_start); discrete events (ban/unban) queue as-is. A
+    background thread flushes every flush_interval seconds; on send failure the
+    batch is appended to a local jsonl disk buffer which the same thread retries.
+    No GeoIP and no local DB here — the centre enriches and stores. The only
+    agent state is the in-memory window (lost on restart, <60s, acceptable) and
+    the disk buffer (survives centre downtime).
+    """
+
+    CHUNK = 500  # centre's _MAX_BATCH — never exceed it in one POST
+
+    def __init__(self, center_url: str, token: str, machine_id: str,
+                 buffer_path: Path, flush_interval: int = 30):
+        self.center_url = center_url
+        self.token = token
+        self.machine_id = machine_id
+        self.buffer_path = buffer_path
+        self.flush_interval = flush_interval
+        self._windows: dict = {}    # (type, ip, window_start) -> event dict
+        self._discrete: list = []   # ban/unban
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _discrete_id(machine_id: str, ev: dict) -> str:
+        h = hashlib.sha1(
+            f"{ev.get('ts')}|{ev['src_ip']}|{ev.get('raw_excerpt','')}".encode()
+        ).hexdigest()[:8]
+        return f"{machine_id}:{ev['event_type']}:{ev['src_ip']}:{int(time.time())}:{h}"
+
+    def add(self, ev: dict):
+        """Route one parsed event: discrete → queue, continuous → window merge."""
+        etype = ev["event_type"]
+        if etype in ("ban", "unban"):
+            ev = dict(ev)
+            ev["event_id"] = self._discrete_id(self.machine_id, ev)
+            ev["count"] = 1
+            with self._lock:
+                self._discrete.append(ev)
+        else:
+            wstart = int(time.time() // 60 * 60)
+            key = (etype, ev["src_ip"], wstart)
+            with self._lock:
+                if key in self._windows:
+                    self._windows[key]["count"] += 1
+                else:
+                    ev = dict(ev)
+                    ev["event_id"] = f"{self.machine_id}:{etype}:{ev['src_ip']}:{wstart}"
+                    ev["count"] = 1
+                    self._windows[key] = ev
+
+    def flush(self):
+        """Drain the current window + discrete queue and send. Called periodically."""
+        with self._lock:
+            batch = list(self._windows.values()) + self._discrete
+            self._windows = {}
+            self._discrete = []
+        if batch:
+            self._send(batch)
+
+    def _send(self, batch: list):
+        try:
+            for i in range(0, len(batch), self.CHUNK):
+                self._post(batch[i:i + self.CHUNK])
+        except Exception as e:
+            print(f"[push] send failed, buffering {len(batch)} events: {e}", file=sys.stderr)
+            self._buffer(batch)
+
+    def _post(self, batch: list):
+        data = json.dumps({"events": batch}).encode()
+        req = urllib.request.Request(
+            self.center_url, data=data,
+            headers={"Content-Type": "application/json",
+                     "Authorization": f"Bearer {self.token}"},
+            method="POST")
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            resp.read()
+
+    def _buffer(self, batch: list):
+        try:
+            with open(self.buffer_path, "a") as f:
+                for e in batch:
+                    f.write(json.dumps(e) + "\n")
+        except OSError as e:
+            print(f"[push] buffer write failed: {e}", file=sys.stderr)
+
+    def retry_buffer(self):
+        """Re-send buffered events; clear the buffer only when all chunks succeed."""
+        if not self.buffer_path.exists():
+            return
+        try:
+            lines = [l for l in self.buffer_path.read_text().splitlines() if l.strip()]
+        except OSError:
+            return
+        if not lines:
+            return
+        batch = []
+        for l in lines:
+            try:
+                batch.append(json.loads(l))
+            except json.JSONDecodeError:
+                pass
+        if not batch:
+            self.buffer_path.unlink(missing_ok=True)
+            return
+        try:
+            for i in range(0, len(batch), self.CHUNK):
+                self._post(batch[i:i + self.CHUNK])
+            self.buffer_path.unlink(missing_ok=True)
+            print(f"[push] flushed {len(batch)} buffered events", file=sys.stderr)
+        except Exception as e:
+            print(f"[push] buffer retry failed ({len(batch)} pending): {e}", file=sys.stderr)
 
 
 # ------------------------------------------------------------------ parsers
@@ -282,12 +404,27 @@ def parse_auth_line(line: str) -> Optional[dict]:
 
 # ------------------------------------------------------------------ collector
 class Collector:
-    def __init__(self, db_path: Path):
+    def __init__(self, db_path: Path, pusher: "Optional[Pusher]" = None):
         self.db_path = db_path
+        self.pusher = pusher  # None → local direct-write mode; set → push mode
         self._local = threading.local()
         self.last_ips: dict[str, float] = {}  # ip -> last event epoch (sampling)
         self._geo = None  # lazy maxminddb reader
         self._geo_lock = threading.Lock()
+
+    def _emit(self, ev: dict, kind: str):
+        """Route a parsed event: push mode → Pusher; local mode → DB handler."""
+        if ev is None:
+            return
+        if self.pusher is not None:
+            self.pusher.add(ev)
+            return
+        if kind == "f2b":
+            self.handle_f2b_event(ev)
+        elif kind == "nginx":
+            self.handle_nginx_event(ev)
+        elif kind == "auth":
+            self.handle_auth_event(ev)
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -556,70 +693,112 @@ class Collector:
         return deleted
 
     def run(self):
-        import threading
-        print(f"[collector] starting, db={DB_PATH}, machine={MACHINE_ID}", file=sys.stderr)
+        mode = "push" if self.pusher is not None else "local"
+        print(f"[collector] starting, mode={mode}, db={DB_PATH}, machine={MACHINE_ID}", file=sys.stderr)
 
         def run_f2b():
             for ev in self.tail_f2b(FAIL2BAN_LOG):
                 print(f"[f2b] {ev['event_type']} {ev['src_ip']} jail={ev['jail']}", file=sys.stderr)
-                self.handle_f2b_event(ev)
+                self._emit(ev, "f2b")
 
         def run_nginx():
             for ev in self.tail_nginx(NGINX_LOG):
                 print(f"[nginx] {ev['event_type']} {ev['src_ip']} {ev.get('uri', '')[:60]}", file=sys.stderr)
-                self.handle_nginx_event(ev)
+                self._emit(ev, "nginx")
 
         def run_auth():
             for ev in self.tail_auth(AUTH_LOG):
                 print(f"[auth] {ev['event_type']} {ev['src_ip']}", file=sys.stderr)
-                self.handle_auth_event(ev)
+                self._emit(ev, "auth")
 
-        # Auto-rotate: once per day at 03:00 UTC
-        def run_rotate():
-            while True:
-                now = datetime.now(timezone.utc)
-                # next 03:00 (use timedelta so month-end day+1 doesn't overflow)
-                target = now.replace(hour=3, minute=0, second=0, microsecond=0)
-                if now >= target:
-                    target = target + timedelta(days=1)
-                wait = (target - now).total_seconds()
-                time.sleep(max(wait, 60))
-                self.rotate_events(keep_days=90)
+        threads = [
+            threading.Thread(target=run_f2b, daemon=True),
+            threading.Thread(target=run_nginx, daemon=True),
+            threading.Thread(target=run_auth, daemon=True),
+        ]
 
-        # GeoIP auto-update: check daily, download only when a newer month build exists.
-        # First check 60s after boot so startup isn't blocked by a 60MB download.
-        def run_geoip_update():
-            time.sleep(60)
-            while True:
-                try:
-                    self.update_geoip_db()
-                except Exception as e:
-                    print(f"[geoip] update error: {e}", file=sys.stderr)
-                time.sleep(24 * 3600)
+        if self.pusher is not None:
+            # push mode: periodic flush + disk-buffer retry. No local DB / GeoIP threads.
+            pusher = self.pusher
 
-        t1 = threading.Thread(target=run_f2b, daemon=True)
-        t2 = threading.Thread(target=run_nginx, daemon=True)
-        t3 = threading.Thread(target=run_auth, daemon=True)
-        t4 = threading.Thread(target=run_rotate, daemon=True)
-        t5 = threading.Thread(target=run_geoip_update, daemon=True)
-        t1.start()
-        t2.start()
-        t3.start()
-        t4.start()
-        t5.start()
-        t1.join()
-        t2.join()
-        t3.join()
-        t4.join()
-        t5.join()
+            def run_flush():
+                while True:
+                    time.sleep(pusher.flush_interval)
+                    try:
+                        pusher.flush()
+                        pusher.retry_buffer()
+                    except Exception as e:
+                        print(f"[push] flush error: {e}", file=sys.stderr)
+
+            threads.append(threading.Thread(target=run_flush, daemon=True))
+        else:
+            # local mode: daily rotation + GeoIP auto-update
+            def run_rotate():
+                while True:
+                    now = datetime.now(timezone.utc)
+                    # next 03:00 (timedelta so month-end day+1 doesn't overflow)
+                    target = now.replace(hour=3, minute=0, second=0, microsecond=0)
+                    if now >= target:
+                        target = target + timedelta(days=1)
+                    time.sleep(max((target - now).total_seconds(), 60))
+                    self.rotate_events(keep_days=90)
+
+            # GeoIP auto-update: check daily, download only when a newer month
+            # build exists. First check 60s after boot so startup isn't blocked.
+            def run_geoip_update():
+                time.sleep(60)
+                while True:
+                    try:
+                        self.update_geoip_db()
+                    except Exception as e:
+                        print(f"[geoip] update error: {e}", file=sys.stderr)
+                    time.sleep(24 * 3600)
+
+            threads.append(threading.Thread(target=run_rotate, daemon=True))
+            threads.append(threading.Thread(target=run_geoip_update, daemon=True))
+
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
 
 # ------------------------------------------------------------------ main
 if __name__ == "__main__":
-    collector = Collector(DB_PATH)
+    ap = argparse.ArgumentParser(description="security event collector")
+    ap.add_argument("--push", action="store_true",
+                    help="push events to the centre /security/ingest instead of writing local SQLite")
+    ap.add_argument("--center-url", default="",
+                    help="centre ingest URL, e.g. https://host/api/plugins/beszel/security/ingest")
+    ap.add_argument("--token", default="", help="agent bearer token")
+    ap.add_argument("--token-file", default="",
+                    help="file containing the bearer token (preferred over --token; keep it 0600)")
+    ap.add_argument("--flush-interval", type=int, default=30,
+                    help="seconds between pushes (default 30)")
+    args = ap.parse_args()
+
+    pusher = None
+    if args.push:
+        token = args.token
+        if args.token_file:
+            try:
+                token = Path(args.token_file).read_text().strip()
+            except OSError as e:
+                print(f"error: cannot read --token-file: {e}", file=sys.stderr)
+                sys.exit(2)
+        if not args.center_url or not token:
+            print("error: --push requires --center-url and --token/--token-file", file=sys.stderr)
+            sys.exit(2)
+        buffer_path = DB_PATH.parent / "security-push-buffer.jsonl"
+        pusher = Pusher(args.center_url, token, MACHINE_ID, buffer_path, args.flush_interval)
+
+    collector = Collector(DB_PATH, pusher=pusher)
     try:
         collector.run()
     except KeyboardInterrupt:
-        print("[collector] stopped", file=sys.stderr)
+        print("[collector] stopping, final flush", file=sys.stderr)
     finally:
-        collector.conn.close()
+        if pusher is not None:
+            pusher.flush()  # drain the remaining window on shutdown
+        else:
+            collector.conn.close()
