@@ -1,0 +1,53 @@
+--- a/internal/site/index.html	2026-08-31 06:00:32.092254885 +0000
++++ b/internal/site/index.html	2026-08-31 06:13:12.019650045 +0000
+@@ -24,6 +24,12 @@
+ 		<script>
+ 			globalThis.BESZEL = "{info}"
+ 		</script>
++	<script>
++		// [beszel patch] Route PocketBase SDK through the Hermes plugin reverse proxy.
++		// NOTE: overrides the hub template's `globalThis.BESZEL = "{info}"` placeholder
++		// (we serve statically, the hub never runs modifyIndexHTML).
++		globalThis.BESZEL = { BASE_PATH: "/api/plugins/beszel/pb" };
++	</script>
+ 	</head>
+ 	<body>
+ 		<div id="app"></div>
+--- a/internal/site/src/main.tsx	2026-08-31 06:00:32.094254900 +0000
++++ b/internal/site/src/main.tsx	2026-08-31 06:19:10.791101996 +0000
+@@ -70,7 +70,9 @@
+ 	}, [])
+ 
+ 	if (!page) {
+-		return <h1 className="text-3xl text-center my-14">404</h1>
++		// [beszel patch] Inside the Hermes plugin iframe the pathname never
++		// matches the router's routes — fall back to home instead of 404.
++		return <Home />
+ 	} else if (page.route === "home") {
+ 		return <Home />
+ 	} else if (page.route === "system") {
+@@ -121,6 +123,24 @@
+ 
+ const I18nApp = () => {
+ 	useEffect(() => {
++		// [beszel patch] Auto-login: fetch a session token from the Hermes
++		// plugin backend (which holds the real credentials), then load it into
++		// the PocketBase authStore. The beszel login page never renders.
++		if (!pb.authStore.isValid) {
++			fetch("/api/plugins/beszel/auto-auth", { credentials: "include" })
++				.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
++				.then(({ token, record }) => {
++					pb.authStore.save(token, record)
++					// authStore.onChange listeners live inside <App>, which is not
++					// mounted yet while the login page shows — flip the atom directly.
++					$authenticated.set(true)
++				})
++				.catch((err) => {
++					console.warn("[beszel] auto-login failed:", err)
++				})
++		}
++	}, [])
++	useEffect(() => {
+ 		dynamicActivate(getLocale())
+ 	}, [])
+ 

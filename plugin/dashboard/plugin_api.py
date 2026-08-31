@@ -96,3 +96,30 @@ async def pb_proxy(path: str, request: Request):
 @router.get("/ping")
 async def ping():
     return {"ok": True, "hub": HUB}
+
+
+@router.get("/auto-auth")
+async def auto_auth():
+    """Return a superuser token+record for the beszel SPA auto-login.
+
+    The SPA (inside the Hermes dashboard tab) calls this on startup and
+    loads the response into the PocketBase authStore — no login page,
+    no credentials in the frontend. Protected by the dashboard session.
+    """
+    import base64
+    body = json.dumps({
+        "identity": SUPERUSER_EMAIL,
+        "password": _read_password(),
+    }).encode()
+    req = urllib.request.Request(
+        f"{HUB}/api/collections/_superusers/auth-with-password",
+        data=body, headers={"Content-Type": "application/json"}, method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            d = json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        raise HTTPException(502, f"beszel auth failed: {e.code}")
+    if not d.get("token"):
+        raise HTTPException(502, "no token")
+    return {"token": d["token"], "record": d.get("record", {})}
