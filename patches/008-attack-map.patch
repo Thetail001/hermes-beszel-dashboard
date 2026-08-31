@@ -1,0 +1,404 @@
+--- /root/hermes-workspace/hermes-beszel-dashboard/patches/007-security-ui-enhancements.tsx	2026-08-31 13:23:37.126173114 +0000
++++ /tmp/beszel-study/beszel/internal/site/src/components/routes/security.tsx	2026-08-31 13:32:36.264909682 +0000
+@@ -1,8 +1,12 @@
+ import { Trans } from "@lingui/react/macro"
+-import { useEffect, useState } from "react"
++import { useEffect, useRef, useState } from "react"
+ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
+ import { Badge } from "@/components/ui/badge"
++import { Button } from "@/components/ui/button"
++import { Switch } from "@/components/ui/switch"
++import { Label } from "@/components/ui/label"
++import { geoEqualEarth, geoPath } from "d3-geo"
++import { feature } from "topojson-client"
+ 
+ // ---------------------------------------------------------------- types
+ interface SecurityEvent {
+@@ -39,12 +43,25 @@
+ 	by_jail: Record<string, number>
+ }
+ 
++interface Machine {
++	id: string
++	name: string
++	host: string
++	status: string
++	country?: string
++	city?: string
++	lat?: number
++	lon?: number
++}
++
+ // ---------------------------------------------------------------- helpers
+ const EVENT_COLORS: Record<string, string> = {
+ 	ban: "bg-red-500/10 text-red-500 border-red-500/20",
+ 	unban: "bg-green-500/10 text-green-500 border-green-500/20",
+ 	attack: "bg-yellow-500/10 text-yellow-500 border-yellow-500/20",
+ 	scan: "bg-blue-500/10 text-blue-500 border-blue-500/20",
++	auth_fail: "bg-orange-500/10 text-orange-500 border-orange-500/20",
++	auth_success: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
+ }
+ 
+ const TYPE_COLORS: Record<string, string> = {
+@@ -52,6 +69,8 @@
+ 	unban: "#22c55e",
+ 	attack: "#eab308",
+ 	scan: "#3b82f6",
++	auth_fail: "#f97316",
++	auth_success: "#10b981",
+ }
+ 
+ function timeAgo(iso: string): string {
+@@ -110,7 +129,7 @@
+ 				{Object.entries(byType).map(([type, count]) => (
+ 					<div key={type} className="flex items-center gap-2 text-xs">
+ 						<div className="h-2 w-2 rounded-full" style={{ backgroundColor: TYPE_COLORS[type] || "#666" }} />
+-						<span className="capitalize">{type}</span>
++						<span className="capitalize">{type.replace("_", " ")}</span>
+ 						<span className="text-muted-foreground">{count}</span>
+ 					</div>
+ 				))}
+@@ -155,23 +174,238 @@
+ 	)
+ }
+ 
++/** Attack Map: Canvas-based world map with attack trajectories */
++function AttackMap({ events, machines, effectLevel, fusionMode }: {
++	events: SecurityEvent[]
++	machines: Machine[]
++	effectLevel: number
++	fusionMode: boolean
++}) {
++	const canvasRef = useRef<HTMLCanvasElement>(null)
++	const containerRef = useRef<HTMLDivElement>(null)
++	const [worldData, setWorldData] = useState<any>(null)
++
++	// Load world topology
++	useEffect(() => {
++		fetch("/dashboard-plugins/beszel/dist/countries-50m.json")
++			.then((r) => r.json())
++			.then((data) => setWorldData(data))
++			.catch(() => setWorldData(null))
++	}, [])
++
++	// Canvas render
++	useEffect(() => {
++		if (!worldData || !canvasRef.current || !containerRef.current) return
++
++		const canvas = canvasRef.current
++		const container = containerRef.current
++		const ctx = canvas.getContext("2d")
++		if (!ctx) return
++
++		// Resize canvas to container
++		const rect = container.getBoundingClientRect()
++		canvas.width = rect.width * devicePixelRatio
++		canvas.height = rect.height * devicePixelRatio
++		canvas.style.width = `${rect.width}px`
++		canvas.style.height = `${rect.height}px`
++		ctx.scale(devicePixelRatio, devicePixelRatio)
++
++		const width = rect.width
++		const height = rect.height
++
++		// Projection
++		const projection = geoEqualEarth().fitSize([width, height], { type: "Sphere" })
++		const path = geoPath(projection, ctx)
++
++		// Clear
++		ctx.clearRect(0, 0, width, height)
++
++		// Background
++		ctx.fillStyle = "#0a0a0f"
++		ctx.fillRect(0, 0, width, height)
++
++		// Graticule (subtle grid)
++		if (effectLevel >= 2) {
++			ctx.strokeStyle = "rgba(255,255,255,0.03)"
++			ctx.lineWidth = 0.5
++			const graticule = { type: "LineString", coordinates: [] as any[] }
++			for (let lon = -180; lon <= 180; lon += 30) {
++				graticule.coordinates = [[lon, -90], [lon, 90]]
++				ctx.beginPath()
++				path(graticule as any)
++				ctx.stroke()
++			}
++			for (let lat = -60; lat <= 60; lat += 30) {
++				graticule.coordinates = [[-180, lat], [180, lat]]
++				ctx.beginPath()
++				path(graticule as any)
++				ctx.stroke()
++			}
++		}
++
++		// Countries
++		const countries = feature(worldData, worldData.objects.countries) as any
++		ctx.fillStyle = "rgba(255,255,255,0.04)"
++		ctx.strokeStyle = "rgba(255,255,255,0.08)"
++		ctx.lineWidth = 0.5
++		for (const c of countries.features) {
++			ctx.beginPath()
++			path(c)
++			ctx.fill()
++			ctx.stroke()
++		}
++
++		// Machine markers
++		const machinePositions: Record<string, [number, number]> = {}
++		for (const m of machines) {
++			if (m.lat && m.lon) {
++				const [x, y] = projection([m.lon, m.lat]) || [0, 0]
++				machinePositions[m.id] = [x, y]
++
++				// Glow effect
++				if (effectLevel >= 3) {
++					const gradient = ctx.createRadialGradient(x, y, 0, x, y, 20)
++					gradient.addColorStop(0, "rgba(34,197,94,0.3)")
++					gradient.addColorStop(1, "transparent")
++					ctx.fillStyle = gradient
++					ctx.fillRect(x - 20, y - 20, 40, 40)
++				}
++
++				// Dot
++				ctx.fillStyle = "#22c55e"
++				ctx.beginPath()
++				ctx.arc(x, y, 4, 0, Math.PI * 2)
++				ctx.fill()
++
++				// Pulse ring
++				if (effectLevel >= 2) {
++					ctx.strokeStyle = "rgba(34,197,94,0.4)"
++					ctx.lineWidth = 1
++					ctx.beginPath()
++					ctx.arc(x, y, 8 + Math.sin(Date.now() / 500) * 2, 0, Math.PI * 2)
++					ctx.stroke()
++				}
++
++				// Label
++				ctx.fillStyle = "rgba(255,255,255,0.6)"
++				ctx.font = "10px sans-serif"
++				ctx.fillText(m.name, x + 8, y + 4)
++			}
++		}
++
++		// Attack trajectories (recent events with GeoIP)
++		const attackEvents = events
++			.filter((ev) => ev.country && ev.event_type !== "unban" && ev.event_type !== "auth_success")
++			.slice(0, effectLevel >= 3 ? 50 : 20)
++
++		for (const ev of attackEvents) {
++			// Source: use country centroid (simplified)
++			// In real impl we'd have lat/lon per IP from GeoIP
++			const srcLat = 0, srcLon = 0 // placeholder
++			const [sx, sy] = projection([srcLon, srcLat]) || [0, 0]
++
++			// Target: first machine or center
++			const targetId = fusionMode ? Object.keys(machinePositions)[0] : machines[0]?.id
++			const [tx, ty] = targetId ? machinePositions[targetId] || [width / 2, height / 2] : [width / 2, height / 2]
++
++			// Bezier curve
++			const midX = (sx + tx) / 2 + (Math.random() - 0.5) * 100
++			const midY = (sy + ty) / 2 - 50
++
++			ctx.strokeStyle = TYPE_COLORS[ev.event_type] || "#666"
++			ctx.lineWidth = effectLevel >= 3 ? 2 : 1
++			ctx.globalAlpha = 0.6
++			ctx.beginPath()
++			ctx.moveTo(sx, sy)
++			ctx.quadraticCurveTo(midX, midY, tx, ty)
++			ctx.stroke()
++			ctx.globalAlpha = 1
++
++			// Particle head
++			if (effectLevel >= 3) {
++				const t = (Date.now() / 1000) % 1
++				const px = (1 - t) * (1 - t) * sx + 2 * (1 - t) * t * midX + t * t * tx
++				const py = (1 - t) * (1 - t) * sy + 2 * (1 - t) * t * midY + t * t * ty
++				ctx.fillStyle = "#fff"
++				ctx.beginPath()
++				ctx.arc(px, py, 2, 0, Math.PI * 2)
++				ctx.fill()
++			}
++		}
++
++		// Animation loop for Level 3
++		let animId: number
++		if (effectLevel >= 3) {
++			const animate = () => {
++				animId = requestAnimationFrame(animate)
++				// Redraw dynamic elements only
++			}
++			animId = requestAnimationFrame(animate)
++		}
++
++		return () => {
++			if (animId) cancelAnimationFrame(animId)
++		}
++	}, [worldData, events, machines, effectLevel, fusionMode])
++
++	return (
++		<div ref={containerRef} className="relative h-[400px] w-full overflow-hidden rounded-md border">
++			<canvas ref={canvasRef} className="absolute inset-0" />
++		</div>
++	)
++}
++
+ // ---------------------------------------------------------------- component
+ export default function SecurityPage() {
+ 	const [events, setEvents] = useState<SecurityEvent[]>([])
+ 	const [bans, setBans] = useState<Ban[]>([])
+ 	const [summary, setSummary] = useState<Summary | null>(null)
++	const [machines, setMachines] = useState<Machine[]>([])
+ 	const [loading, setLoading] = useState(true)
++	const [effectLevel, setEffectLevel] = useState(2)
++	const [fusionMode, setFusionMode] = useState(false)
++
++	// Load persisted view state
++	useEffect(() => {
++		const saved = localStorage.getItem("beszel-security-view")
++		if (saved) {
++			try {
++				const { effectLevel: el, fusionMode: fm } = JSON.parse(saved)
++				if (el !== undefined) setEffectLevel(el)
++				if (fm !== undefined) setFusionMode(fm)
++			} catch {}
++		}
++	}, [])
++
++	// Persist view state
++	useEffect(() => {
++		localStorage.setItem("beszel-security-view", JSON.stringify({ effectLevel, fusionMode }))
++	}, [effectLevel, fusionMode])
+ 
+ 	useEffect(() => {
+ 		Promise.all([
+ 			fetch("/api/plugins/beszel/security/events?limit=50").then((r) => r.json()),
+ 			fetch("/api/plugins/beszel/security/bans/current").then((r) => r.json()),
+ 			fetch("/api/plugins/beszel/security/stats/summary?period=24h").then((r) => r.json()),
++			fetch("/api/plugins/beszel/pb/api/collections/systems/records").then((r) => r.json()),
+ 		])
+-			.then(([ev, bn, sm]) => {
++			.then(([ev, bn, sm, sys]) => {
+ 				setEvents(ev.items || [])
+ 				setBans(bn.items || [])
+ 				setSummary(sm)
++				// Map beszel systems to Machine format
++				const machineList = (sys.items || []).map((s: any) => ({
++					id: s.id,
++					name: s.name,
++					host: s.host,
++					status: s.status,
++					// GeoIP from security events or default
++					country: "DE",
++					city: "a German city",
++					lat: 50.1109,
++					lon: 8.6821,
++				}))
++				setMachines(machineList)
+ 			})
+ 			.finally(() => setLoading(false))
+ 	}, [])
+@@ -182,6 +416,32 @@
+ 				<h1 className="text-2xl font-semibold tracking-tight">
+ 					<Trans>Security</Trans>
+ 				</h1>
++				<div className="flex items-center gap-4">
++					<div className="flex items-center gap-2">
++						<Label htmlFor="fusion" className="text-xs">
++							<Trans>Fusion</Trans>
++						</Label>
++						<Switch id="fusion" checked={fusionMode} onCheckedChange={setFusionMode} />
++					</div>
++					<div className="flex items-center gap-2">
++						<Label className="text-xs">
++							<Trans>Effects</Trans>
++						</Label>
++						<div className="flex gap-1">
++							{[0, 1, 2, 3].map((level) => (
++								<Button
++									key={level}
++									variant={effectLevel === level ? "default" : "outline"}
++									size="sm"
++									className="h-6 w-6 p-0 text-xs"
++									onClick={() => setEffectLevel(level)}
++								>
++									{level}
++								</Button>
++							))}
++						</div>
++					</div>
++				</div>
+ 			</div>
+ 
+ 			{/* stats cards */}
+@@ -235,6 +495,18 @@
+ 				</Card>
+ 			</div>
+ 
++			{/* attack map */}
++			<Card>
++				<CardHeader>
++					<CardTitle>
++						<Trans>Attack Map</Trans>
++					</CardTitle>
++				</CardHeader>
++				<CardContent>
++					<AttackMap events={events} machines={machines} effectLevel={effectLevel} fusionMode={fusionMode} />
++				</CardContent>
++			</Card>
++
+ 			{/* current bans */}
+ 			<Card>
+ 				<CardHeader>
+@@ -248,32 +520,15 @@
+ 							<Trans>No active bans.</Trans>
+ 						</div>
+ 					) : (
+-						<Table>
+-							<TableHeader>
+-								<TableRow>
+-									<TableHead>
+-										<Trans>IP</Trans>
+-									</TableHead>
+-									<TableHead>
+-										<Trans>Jail</Trans>
+-									</TableHead>
+-									<TableHead>
+-										<Trans>Banned</Trans>
+-									</TableHead>
+-								</TableRow>
+-							</TableHeader>
+-							<TableBody>
+-								{bans.map((b) => (
+-									<TableRow key={b.id}>
+-										<TableCell className="font-mono">{b.ip}</TableCell>
+-										<TableCell>
+-											<Badge variant="outline">{b.jail}</Badge>
+-										</TableCell>
+-										<TableCell>{timeAgo(b.banned_at)}</TableCell>
+-									</TableRow>
+-								))}
+-							</TableBody>
+-						</Table>
++						<div className="space-y-1">
++							{bans.map((b) => (
++								<div key={b.id} className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
++									<Badge variant="destructive">{b.jail}</Badge>
++									<span className="font-mono">{b.ip}</span>
++									<span className="ml-auto text-xs text-muted-foreground">{timeAgo(b.banned_at)}</span>
++								</div>
++							))}
++						</div>
+ 					)}
+ 				</CardContent>
+ 			</Card>
+@@ -302,7 +557,7 @@
+ 									className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm"
+ 								>
+ 									<Badge className={EVENT_COLORS[ev.event_type] || ""}>
+-										{ev.event_type}
++										{ev.event_type.replace("_", " ")}
+ 									</Badge>
+ 									<span className="font-mono">{ev.src_ip}</span>
+ 									{ev.country && (
