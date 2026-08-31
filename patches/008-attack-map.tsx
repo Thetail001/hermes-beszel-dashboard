@@ -19,6 +19,7 @@ interface SecurityEvent {
 	jail: string | null
 	uri: string | null
 	ua: string | null
+	username: string | null
 	country: string | null
 	asn: string | null
 	lat: number | null
@@ -988,6 +989,7 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 											{ev.event_type.replace("_", " ")}
 										</Badge>
 										{ev.jail && <span className="text-muted-foreground">[{ev.jail}]</span>}
+										{ev.username && <span className="font-mono text-xs text-muted-foreground">user={ev.username}</span>}
 										{ev.uri && <span className="max-w-[200px] truncate text-muted-foreground">{ev.uri}</span>}
 										{ev.count > 1 && <span className="text-muted-foreground">×{ev.count}</span>}
 										<span className="ml-auto text-xs text-muted-foreground">{timeAgo(ev.ts)}</span>

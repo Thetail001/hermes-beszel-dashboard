@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS security_events (
     jail TEXT,                      -- fail2ban jail name
     uri TEXT,                       -- nginx request URI
     ua TEXT,                        -- user agent
+    username TEXT,                  -- sshd attempted username (auth.log)
     country TEXT,                   -- GeoIP country code
     asn TEXT,                       -- GeoIP ASN
     lat REAL,                       -- GeoIP latitude
@@ -242,12 +243,21 @@ AUTH_RE = re.compile(
     r"(?P<msg>.*)$"
 )
 
+# Each pattern: (regex, event_type). Named groups: `user` (optional) and `ip`.
 AUTH_PATTERNS = [
-    (re.compile(r"Failed password for (?:invalid user )?\S+ from (?P<ip>\S+) port \d+"), "auth_fail"),
-    (re.compile(r"Invalid user \S+ from (?P<ip>\S+) port \d+"), "auth_fail"),
-    (re.compile(r"Connection closed by (?:invalid user \S+ )?(?P<ip>\S+) port \d+ \[preauth\]"), "auth_fail"),
-    (re.compile(r"Accepted password for \S+ from (?P<ip>\S+) port \d+"), "auth_success"),
+    # Failed password for root from 1.2.3.4 port 22 ssh2
+    # Failed password for invalid user admin from 1.2.3.4 port 22
+    (re.compile(r"Failed password for (?:(?:invalid user )?(?P<user>\S+)) from (?P<ip>\S+) port \d+"), "auth_fail"),
+    # Invalid user git from 1.2.3.4 port 22
+    (re.compile(r"Invalid user (?P<user>\S+) from (?P<ip>\S+) port \d+"), "auth_fail"),
+    # Connection closed by 1.2.3.4 port 22 [preauth]
+    # Connection closed by authenticating user root 1.2.3.4 port 22 [preauth]
+    # Connection reset by authenticating user root 1.2.3.4 port 22 [preauth]
+    (re.compile(r"Connection (?:closed|reset) by (?:authenticating user (?P<user>\S+) )?(?P<ip>\S+) port \d+ \[preauth\]"), "auth_fail"),
+    # Accepted password for root from 1.2.3.4 port 22
+    (re.compile(r"Accepted password for (?P<user>\S+) from (?P<ip>\S+) port \d+"), "auth_success"),
 ]
+
 
 def parse_auth_line(line: str) -> Optional[dict]:
     m = AUTH_RE.match(line.strip())
@@ -264,6 +274,7 @@ def parse_auth_line(line: str) -> Optional[dict]:
                 "ts": m.group("ts"),
                 "event_type": event_type,
                 "src_ip": ip,
+                "username": pm.groupdict().get("user"),
                 "raw_excerpt": line.strip()[:500],
             }
     return None
@@ -406,10 +417,10 @@ class Collector:
         country, city, lat, lon = self.geo_lookup(ip)
         self.conn.execute(
             "INSERT INTO security_events "
-            "(ts, machine_id, event_type, src_ip, raw_excerpt, country, asn, lat, lon) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "(ts, machine_id, event_type, src_ip, username, raw_excerpt, country, asn, lat, lon) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (ev["ts"], MACHINE_ID, ev["event_type"], ip,
-             ev["raw_excerpt"], country, city, lat, lon),
+             ev.get("username"), ev["raw_excerpt"], country, city, lat, lon),
         )
         self.conn.commit()
 
