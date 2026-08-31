@@ -1,7 +1,7 @@
 {
   "name": "beszel",
-  "label": "服务器监控",
-  "description": "多机服务器资源监控（beszel 内核）+ 安全事件态势",
+  "label": "Beszel Monitor",
+  "description": "Multi-machine server resource monitoring (beszel core) + security event situational awareness",
   "icon": "MonitorCog",
   "version": "0.1.0",
   "tab": {
