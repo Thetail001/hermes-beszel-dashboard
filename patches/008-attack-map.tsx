@@ -687,93 +687,6 @@ export default function SecurityPage() {
 				</div>
 			</div>
 
-			{/* Filter bar */}
-			<Card>
-				<CardContent className="pt-4">
-					<div className="flex flex-wrap items-center gap-3">
-						{/* Query input */}
-						<div className="flex items-center gap-2">
-							<Input
-								placeholder="ip:1.2.3.4 type:ban country:NL"
-								value={queryInput}
-								onChange={(e) => setQueryInput(e.target.value)}
-								onKeyDown={(e) => e.key === "Enter" && handleQuerySubmit()}
-								className="h-8 w-64 text-xs"
-							/>
-							<Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleQuerySubmit}>
-								<Trans>Query</Trans>
-							</Button>
-						</div>
-
-						{/* Time period */}
-						<select
-							value={filter.period}
-							onChange={(e) => setFilter((f) => ({ ...f, period: e.target.value, start: "", end: "" }))}
-							className="h-8 rounded-md border bg-background px-2 text-xs"
-						>
-							<option value="24h">Last 24h</option>
-							<option value="7d">Last 7d</option>
-							<option value="30d">Last 30d</option>
-							<option value="custom">Custom</option>
-						</select>
-
-						{/* Custom date range */}
-						{filter.period === "custom" && (
-							<>
-								<Input
-									type="datetime-local"
-									value={filter.start}
-									onChange={(e) => setFilter((f) => ({ ...f, start: e.target.value }))}
-									className="h-8 text-xs"
-								/>
-								<span className="text-xs text-muted-foreground">to</span>
-								<Input
-									type="datetime-local"
-									value={filter.end}
-									onChange={(e) => setFilter((f) => ({ ...f, end: e.target.value }))}
-									className="h-8 text-xs"
-								/>
-							</>
-						)}
-
-						{/* Sort */}
-						<select
-							value={filter.sort}
-							onChange={(e) => setFilter((f) => ({ ...f, sort: e.target.value }))}
-							className="h-8 rounded-md border bg-background px-2 text-xs"
-						>
-							<option value="recent">Most recent</option>
-							<option value="count">Most active</option>
-							<option value="first_seen">Newest first</option>
-						</select>
-
-						{/* Active filter badges */}
-						{(filter.type || filter.country || filter.ip) && (
-							<div className="flex items-center gap-1">
-								{filter.type && (
-									<Badge variant="secondary" className="text-xs">
-										type:{filter.type}
-										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, type: "" }))}>×</button>
-									</Badge>
-								)}
-								{filter.country && (
-									<Badge variant="secondary" className="text-xs">
-										country:{filter.country}
-										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, country: "" }))}>×</button>
-									</Badge>
-								)}
-								{filter.ip && (
-									<Badge variant="secondary" className="text-xs">
-										ip:{filter.ip}
-										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, ip: "" }))}>×</button>
-									</Badge>
-								)}
-							</div>
-						)}
-					</div>
-				</CardContent>
-			</Card>
-
 			{/* Stats cards */}
 			<div className="grid gap-4 md:grid-cols-4">
 				<Card>
@@ -845,10 +758,83 @@ export default function SecurityPage() {
 				</CardContent>
 			</Card>
 
-			{/* Attackers (Level 1) */}
+			{/* Attackers (Level 1) with integrated filter bar */}
 			<Card>
-				<CardHeader>
+				<CardHeader className="space-y-3">
 					<CardTitle><Trans>Attackers</Trans></CardTitle>
+					{/* Filter bar inside Attackers card header */}
+					<div className="flex flex-wrap items-center gap-3 border-t pt-3">
+						<div className="flex items-center gap-2">
+							<Input
+								placeholder="ip:1.2.3.4 type:ban country:NL"
+								value={queryInput}
+								onChange={(e) => setQueryInput(e.target.value)}
+								onKeyDown={(e) => e.key === "Enter" && handleQuerySubmit()}
+								className="h-8 w-64 text-xs"
+							/>
+							<Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleQuerySubmit}>
+								<Trans>Query</Trans>
+							</Button>
+						</div>
+						<select
+							value={filter.period}
+							onChange={(e) => setFilter((f) => ({ ...f, period: e.target.value, start: "", end: "" }))}
+							className="h-8 rounded-md border bg-background px-2 text-xs"
+						>
+							<option value="24h">Last 24h</option>
+							<option value="7d">Last 7d</option>
+							<option value="30d">Last 30d</option>
+							<option value="custom">Custom</option>
+						</select>
+						{filter.period === "custom" && (
+							<>
+								<Input
+									type="datetime-local"
+									value={filter.start}
+									onChange={(e) => setFilter((f) => ({ ...f, start: e.target.value }))}
+									className="h-8 text-xs"
+								/>
+								<span className="text-xs text-muted-foreground">to</span>
+								<Input
+									type="datetime-local"
+									value={filter.end}
+									onChange={(e) => setFilter((f) => ({ ...f, end: e.target.value }))}
+									className="h-8 text-xs"
+								/>
+							</>
+						)}
+						<select
+							value={filter.sort}
+							onChange={(e) => setFilter((f) => ({ ...f, sort: e.target.value }))}
+							className="h-8 rounded-md border bg-background px-2 text-xs"
+						>
+							<option value="recent">Most recent</option>
+							<option value="count">Most active</option>
+							<option value="first_seen">Newest first</option>
+						</select>
+						{(filter.type || filter.country || filter.ip) && (
+							<div className="flex items-center gap-1">
+								{filter.type && (
+									<Badge variant="secondary" className="text-xs">
+										type:{filter.type}
+										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, type: "" }))}>×</button>
+									</Badge>
+								)}
+								{filter.country && (
+									<Badge variant="secondary" className="text-xs">
+										country:{filter.country}
+										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, country: "" }))}>×</button>
+									</Badge>
+								)}
+								{filter.ip && (
+									<Badge variant="secondary" className="text-xs">
+										ip:{filter.ip}
+										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, ip: "" }))}>×</button>
+									</Badge>
+								)}
+							</div>
+						)}
+					</div>
 				</CardHeader>
 				<CardContent>
 					{loading ? (
@@ -896,6 +882,8 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 	const [loading, setLoading] = useState(true)
 	const [hasMore, setHasMore] = useState(false)
 	const [cursor, setCursor] = useState<string | null>(null)
+	// Expanded event IDs (individual control)
+	const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
 
 	const fetchTimeline = (before?: string) => {
 		setLoading(true)
@@ -920,23 +908,40 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 
 	useEffect(() => {
 		fetchTimeline()
-		// Also fetch geo info
 		fetch(`/api/plugins/beszel/security/ip/${ip}`)
 			.then((r) => r.json())
 			.then((d) => setGeo(d.geo))
 			.catch(() => {})
 	}, [ip])
 
-	// Group consecutive same-type events
-	const grouped: Array<SecurityEvent & { count: number }> = []
+	// Group consecutive same-type events (but keep individual IDs for expansion)
+	const grouped: Array<SecurityEvent & { count: number; ids: number[] }> = []
 	for (const ev of events) {
 		const last = grouped[grouped.length - 1]
 		if (last && last.event_type === ev.event_type && last.jail === ev.jail) {
 			last.count += ev.count || 1
+			last.ids.push(ev.id)
 		} else {
-			grouped.push({ ...ev, count: ev.count || 1 })
+			grouped.push({ ...ev, count: ev.count || 1, ids: [ev.id] })
 		}
 	}
+
+	const toggleExpand = (id: number) => {
+		setExpandedIds((prev) => {
+			const next = new Set(prev)
+			if (next.has(id)) next.delete(id)
+			else next.add(id)
+			return next
+		})
+	}
+
+	const expandAll = () => {
+		const allIds = new Set<number>()
+		for (const g of grouped) for (const id of g.ids) allIds.add(id)
+		setExpandedIds(allIds)
+	}
+
+	const collapseAll = () => setExpandedIds(new Set())
 
 	return (
 		<div className="space-y-4">
@@ -950,6 +955,14 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 						{geo.country} {geo.asn} {geo.lat && geo.lon ? `(${geo.lat.toFixed(2)}, ${geo.lon.toFixed(2)})` : ""}
 					</div>
 				)}
+				<div className="ml-auto flex gap-2">
+					<Button variant="outline" size="sm" className="h-7 text-xs" onClick={expandAll}>
+						<Trans>Expand all</Trans>
+					</Button>
+					<Button variant="outline" size="sm" className="h-7 text-xs" onClick={collapseAll}>
+						<Trans>Collapse all</Trans>
+					</Button>
+				</div>
 			</div>
 
 			<Card>
@@ -963,15 +976,38 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 						<div className="py-8 text-center text-muted-foreground"><Trans>No events for this IP.</Trans></div>
 					) : (
 						<div className="space-y-1">
-							{grouped.map((ev, i) => (
-								<div key={i} className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
-									<Badge className={EVENT_COLORS[ev.event_type] || ""}>
-										{ev.event_type.replace("_", " ")}
-									</Badge>
-									{ev.jail && <span className="text-muted-foreground">[{ev.jail}]</span>}
-									{ev.uri && <span className="max-w-[200px] truncate text-muted-foreground">{ev.uri}</span>}
-									{ev.count > 1 && <span className="text-muted-foreground">×{ev.count}</span>}
-									<span className="ml-auto text-xs text-muted-foreground">{timeAgo(ev.ts)}</span>
+							{grouped.map((ev, gi) => (
+								<div key={gi} className="rounded-md border">
+									{/* Event row */}
+									<div
+										className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm hover:bg-muted/50"
+										onClick={() => toggleExpand(ev.id)}
+									>
+										<span className="text-xs text-muted-foreground">{expandedIds.has(ev.id) ? "▼" : "▶"}</span>
+										<Badge className={EVENT_COLORS[ev.event_type] || ""}>
+											{ev.event_type.replace("_", " ")}
+										</Badge>
+										{ev.jail && <span className="text-muted-foreground">[{ev.jail}]</span>}
+										{ev.uri && <span className="max-w-[200px] truncate text-muted-foreground">{ev.uri}</span>}
+										{ev.count > 1 && <span className="text-muted-foreground">×{ev.count}</span>}
+										<span className="ml-auto text-xs text-muted-foreground">{timeAgo(ev.ts)}</span>
+									</div>
+									{/* Expanded raw log details */}
+									{expandedIds.has(ev.id) && (
+										<div className="border-t bg-muted/30 px-3 py-2">
+											{ev.ids.map((eventId) => {
+												const original = events.find((e) => e.id === eventId)
+												return original?.raw_excerpt ? (
+													<div key={eventId} className="mb-1 last:mb-0">
+														<div className="text-xs text-muted-foreground">{original.ts}</div>
+														<pre className="mt-1 whitespace-pre-wrap break-all font-mono text-xs">
+															{original.raw_excerpt}
+														</pre>
+													</div>
+												) : null
+											})}
+										</div>
+									)}
 								</div>
 							))}
 							{hasMore && (

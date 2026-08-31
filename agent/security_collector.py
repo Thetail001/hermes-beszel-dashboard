@@ -86,7 +86,7 @@ CREATE TABLE IF NOT EXISTS security_events (
     asn TEXT,                       -- GeoIP ASN
     lat REAL,                       -- GeoIP latitude
     lon REAL,                       -- GeoIP longitude
-    raw_excerpt TEXT,               -- first 200 chars of raw log
+    raw_excerpt TEXT,               -- first 500 chars of raw log
     count INTEGER DEFAULT 1,        -- sampled count
     burst INTEGER DEFAULT 0,        -- burst attack flag
     created_at TEXT DEFAULT (datetime('now'))
@@ -184,7 +184,7 @@ def parse_f2b_line(line: str) -> Optional[dict]:
         "event_type": m.group("action").lower(),
         "jail": m.group("jail"),
         "src_ip": m.group("ip"),
-        "raw_excerpt": line.strip()[:200],
+        "raw_excerpt": line.strip()[:500],
     }
 
 
@@ -231,7 +231,7 @@ def parse_nginx_line(line: str) -> Optional[dict]:
         "src_ip": m.group("ip"),
         "uri": uri[:500],
         "ua": m.group("ua")[:300],
-        "raw_excerpt": line.strip()[:200],
+        "raw_excerpt": line.strip()[:500],
     }
 
 
@@ -264,7 +264,7 @@ def parse_auth_line(line: str) -> Optional[dict]:
                 "ts": m.group("ts"),
                 "event_type": event_type,
                 "src_ip": ip,
-                "raw_excerpt": line.strip()[:200],
+                "raw_excerpt": line.strip()[:500],
             }
     return None
 
