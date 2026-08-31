@@ -1,0 +1,16 @@
+[Unit]
+Description=Beszel Security Event Collector
+After=fail2ban.service
+Wants=fail2ban.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /root/hermes-workspace/hermes-beszel-dashboard/agent/security_collector.py
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=beszel-security-collector
+
+[Install]
+WantedBy=multi-user.target
