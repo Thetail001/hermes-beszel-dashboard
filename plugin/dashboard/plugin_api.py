@@ -60,54 +60,59 @@ def _get_token() -> str:
 # ---------------------------------------------------------------- proxy
 @router.api_route("/pb/{path:path}", methods=["GET", "POST", "PATCH", "DELETE", "PUT"])
 async def pb_proxy(path: str, request: Request):
-    """Forward PocketBase API calls with superuser token attached."""
-    # Read raw body (POST/PATCH/PUT)
+    """Forward PocketBase API calls with user token attached.
+
+    GET /api/realtime (SSE) is streamed through httpx so PocketBase's
+    EventSource keeps its live connection — beszel's realtime subscriptions
+    depend on it.
+    """
+    url = f"{HUB}/{path}"
+    if request.url.query:
+        url += f"?{request.url.query}"
+
+    headers = {
+        "Content-Type": request.headers.get("content-type", "application/json"),
+        "Authorization": _get_token(),
+    }
     body = await request.body()
 
-    fwd = urllib.request.Request(
-        f"{HUB}/{path}",
-        data=body if body else None,
-        method=request.method,
-        headers={
-            "Content-Type": request.headers.get("content-type", "application/json"),
-            "Authorization": _get_token(),
-        },
-    )
-    # carry query string
-    if request.url.query:
-        fwd.full_url = f"{HUB}/{path}?{request.url.query}"
+    import httpx
+    client = httpx.AsyncClient(timeout=httpx.Timeout(600.0, connect=10.0))
     try:
-        with urllib.request.urlopen(fwd, timeout=30) as resp:
-            payload = resp.read()
-            ctype = resp.headers.get("content-type", "application/json")
-            status = resp.status
-    except urllib.error.HTTPError as e:
-        payload = e.read()
-        ctype = e.headers.get("content-type", "application/json") if e.headers else "application/json"
-        status = e.code
-    except urllib.error.URLError as e:
-        raise HTTPException(502, f"beszel hub unreachable: {e.reason}")
+        # streaming request for SSE endpoints
+        if "realtime" in path and request.method == "GET":
+            req = client.build_request(request.method, url, headers=headers)
+            upstream = await client.send(req, stream=True)
+            if upstream.status_code != 200:
+                payload = await upstream.aread()
+                await upstream.aclose()
+                await client.aclose()
+                return Response(content=payload, status_code=upstream.status_code,
+                                media_type="application/json")
+            from fastapi.responses import StreamingResponse
 
-    # SSE streams (PocketBase realtime): stream through unbuffered.
-    # beszel's EventSource reconnects if this breaks, but streaming keeps
-    # live updates working instead of a hard 501.
-    if "text/event-stream" in ctype:
-        async def sse_gen():
-            loop = asyncio.get_event_loop()
-            req_fut = loop.run_in_executor(None, lambda: urllib.request.urlopen(fwd, timeout=600))
-            try:
-                resp = await req_fut
-                while True:
-                    chunk = await loop.run_in_executor(None, resp.read, 1024)
-                    if not chunk:
-                        break
-                    yield chunk
-            finally:
-                pass
-        from fastapi.responses import StreamingResponse
-        return StreamingResponse(sse_gen(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-    return Response(content=payload, status_code=status, media_type=ctype)
+            async def stream_sse():
+                try:
+                    async for chunk in upstream.aiter_bytes():
+                        yield chunk
+                finally:
+                    await upstream.aclose()
+                    await client.aclose()
+
+            return StreamingResponse(stream_sse(), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache",
+                                              "X-Accel-Buffering": "no"})
+
+        # normal JSON request/response
+        req = client.build_request(request.method, url, headers=headers,
+                                   content=body if body else None)
+        resp = await client.send(req)
+        await client.aclose()
+        return Response(content=resp.content, status_code=resp.status_code,
+                        media_type=resp.headers.get("content-type", "application/json"))
+    except httpx.HTTPError as e:
+        await client.aclose()
+        raise HTTPException(502, f"beszel hub unreachable: {e}")
 
 
 @router.get("/ping")
@@ -117,19 +122,20 @@ async def ping():
 
 @router.get("/auto-auth")
 async def auto_auth():
-    """Return a superuser token+record for the beszel SPA auto-login.
+    """Return a (regular) user token+record for the beszel SPA auto-login.
 
-    The SPA (inside the Hermes dashboard tab) calls this on startup and
-    loads the response into the PocketBase authStore — no login page,
-    no credentials in the frontend. Protected by the dashboard session.
+    Regular users collection (not _superusers): the beszel UI is designed
+    around regular users — user_settings records, roles, alert filters all
+    key on the users table. Superuser tokens caused 400s in user_settings
+    and dead buttons.
+    Protected by the dashboard session.
     """
-    import base64
     body = json.dumps({
         "identity": SUPERUSER_EMAIL,
         "password": _read_password(),
     }).encode()
     req = urllib.request.Request(
-        f"{HUB}/api/collections/_superusers/auth-with-password",
+        f"{HUB}/api/collections/users/auth-with-password",
         data=body, headers={"Content-Type": "application/json"}, method="POST",
     )
     try:
