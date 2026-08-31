@@ -1,8 +1,14 @@
 # example.com —— hermes dashboard 反代
-# 两层防护：nginx basic auth（本文件）+ hermes 自身 auth
-# 插件资产/插件 API 豁免 Basic：iframe 子资源请求不重放凭据会触发
-# 浏览器 Basic 挑战弹窗（EventSource/fetch omit credentials 时）。
-# 这些路径由 hermes dashboard 自身会话保护，安全性不受影响。
+# 认证架构（2026-08-31 定稿）：
+#   第 1 层 nginx：会话 cookie 存在性挡板（auth_request 不需要，
+#                  直接 map cookie —— 无 cookie 302 /login，零弹窗）
+#   第 2 层 hermes：会话验签（密码+cookie+CSRF）
+# 0day 防护：未登录的扫描器被 nginx 302 挡在 hermes 代码之外
+map $http_cookie $has_hermes_session {
+    default 0;
+    "~*hermes_session_at" 1;
+}
+
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
@@ -11,11 +17,30 @@ server {
     ssl_certificate /etc/nginx/ssl/example.com.crt;
     ssl_certificate_key /etc/nginx/ssl/example.com.key;
 
-    # 认证策略（2026-08-31 调整）：仅保留 hermes 自身会话认证。
-    # 原双层 Basic + hermes 导致 iframe/PWA 子资源（favicon、manifest、
-    # EventSource）不带 Basic 凭据时反复触发浏览器认证弹窗。
-    # hermes 登录（密码+会话 cookie+CSRF）防护强度不低于 Basic。
+    # 永久豁免：健康探针（无敏感信息，公开 liveness）
+    location = /api/health {
+        proxy_pass http://127.0.0.1:9119;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
+
+    # 登录页与认证端点：必须可达（否则鸡生蛋问题）
+    location ~ ^/(login|auth/)(.*)?$ {
+        proxy_pass http://127.0.0.1:9119;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+    }
+
+    # 其余一切：cookie 挡板
     location / {
+        if ($has_hermes_session = 0) {
+            return 302 /login;
+        }
         proxy_pass http://127.0.0.1:9119;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
