@@ -97,7 +97,15 @@ curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/master/install.sh | 
 
 ### agent 侧（每台被监控 VPS）
 
-**一条命令安装**（去中心机 beszel webui 复制公钥和 token）：
+先在中心机 beszel webui 添加这台机器，拿到公钥和 token：
+
+1. 「添加系统」→ 填**名称**（面板显示名）+ **Host/IP**（目标机公网 IP，端口默认 45876 不用改）
+2. 复制安装命令（公钥和 token 都自动带上）
+3. **点底部「Add / 添加」保存** —— 这步不能省，系统记录和 token 要写进 hub 数据库才生效
+
+> ⚠️ **「复制命令」≠「保存」**：弹窗里复制命令和「Add」是两个分开的动作。只复制命令、没点「Add」，token 根本没落库，agent 装好会一直 401 连不上。先确认机器出现在列表里，再去目标机装。
+
+**一条命令安装**（用上面复制的公钥和 token）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/master/agent/install-agent.sh \

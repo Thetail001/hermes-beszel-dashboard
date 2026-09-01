@@ -97,7 +97,15 @@ Then log into the beszel web UI (`http://127.0.0.1:8090`), generate a **universa
 
 ### Agent side (every monitored VPS)
 
-**One-command install** (copy the public key + token from the centre's beszel web UI):
+First add the machine in the centre's beszel web UI to get its public key + token:
+
+1. "Add system" → fill in the **name** (display name) + **Host/IP** (the machine's public IP; port defaults to 45876, usually leave it)
+2. Copy the install command (the public key + token are included automatically)
+3. **Click the bottom "Add" button to save** — this step is mandatory: the system record and token are only effective once written into the hub database
+
+> ⚠️ **"Copy command" ≠ "save"**: the copy button and the "Add" button are two separate actions in the dialog. Copying the command without clicking "Add" leaves the token unregistered, and the agent will keep failing with 401. Make sure the machine shows up in the list before you run the install on the target.
+
+**One-command install** (using the public key + token copied above):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/master/agent/install-agent.sh \
