@@ -45,7 +45,6 @@
 │   ├── security_collector.py   # 安全事件探针：tail 三源日志，push 或本地直写
 │   └── security-collector.service  # systemd unit 示例
 ├── hub/                        # 控制机部署物（beszel hub/agent systemd + nginx 反代示例）
-└── NOTES.md                    # 设计决策、踩坑记录（中文）
 ```
 
 ## 使用说明
@@ -180,7 +179,7 @@ journalctl -u security-collector -f     # 应看到 [collector] starting, mode=p
 
 ## 上游升级
 
-beszel 发新版后：重拉上游 → 按序重放 `patches/`（以 `patches/NNN-*.tsx` 快照为基底逐个 diff）→ build → 更新 `plugin/dashboard/dist/`（详见 NOTES.md）。
+beszel 发新版后：重拉上游 → 按序重放 `patches/`（以 `patches/NNN-*.tsx` 快照为基底逐个 diff）→ build → 更新 `plugin/dashboard/dist/`。
 
 ## License
 

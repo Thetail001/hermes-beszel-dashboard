@@ -45,7 +45,6 @@ Control host:      beszel hub (PocketBase)   token auth + idempotent UPSERT + Ge
 │   ├── security_collector.py   # security probe: tails 3 logs, push or local-write mode
 │   └── security-collector.service  # example systemd unit
 ├── hub/                        # control-host deployment refs (beszel hub/agent units + nginx example)
-└── NOTES.md                    # design decisions & pitfalls (Chinese)
 ```
 
 ## Usage
@@ -180,7 +179,7 @@ When the centre is unreachable, events land in `security-push-buffer.jsonl` and 
 
 ## Upstream upgrades
 
-When beszel releases a new version: re-pull upstream → replay `patches/` in order (each `patches/NNN-*.tsx` snapshot is the diff base) → build → refresh `plugin/dashboard/dist/` (see NOTES.md).
+When beszel releases a new version: re-pull upstream → replay `patches/` in order (each `patches/NNN-*.tsx` snapshot is the diff base) → build → refresh `plugin/dashboard/dist/`.
 
 ## License
 
