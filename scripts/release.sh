@@ -63,10 +63,16 @@ if gh release view "$TAG" >/dev/null 2>&1; then
   gh release delete "$TAG" --yes || fail "删除旧 release 失败"
 fi
 
+# beta/rc/alpha/pre 版本自动标记为 prerelease
+PRERELEASE_FLAG=""
+case "$TAG" in
+  *beta*|*rc*|*alpha*|*pre*) PRERELEASE_FLAG="--prerelease" ;;
+esac
+
 if [ -n "$NOTES" ]; then
-  gh release create "$TAG" "$TARBALL" --title "$TAG" --notes "$NOTES" || fail "创建 release 失败"
+  gh release create "$TAG" "$TARBALL" --title "$TAG" $PRERELEASE_FLAG --notes "$NOTES" || fail "创建 release 失败"
 else
-  gh release create "$TAG" "$TARBALL" --title "$TAG" --generate-notes || fail "创建 release 失败"
+  gh release create "$TAG" "$TARBALL" --title "$TAG" $PRERELEASE_FLAG --generate-notes || fail "创建 release 失败"
 fi
 
 info "release $TAG 已创建，产物 $TARBALL 已上传。"
