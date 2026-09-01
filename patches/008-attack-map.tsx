@@ -445,6 +445,87 @@ function AttackMap({ events, machines, effectLevel, fusionMode }: {
 	)
 }
 
+/** Pagination bar for the attackers list. Rendered above and below the list. */
+function PaginationBar({
+	page,
+	pageSize,
+	total,
+	onPageChange,
+	onPageSizeChange,
+}: {
+	page: number
+	pageSize: number
+	total: number
+	onPageChange: (p: number) => void
+	onPageSizeChange: (n: number) => void
+}) {
+	const totalPages = Math.max(1, Math.ceil(total / pageSize))
+	const [jump, setJump] = useState("")
+
+	const doJump = () => {
+		const n = parseInt(jump, 10)
+		if (!Number.isNaN(n) && n >= 1 && n <= totalPages) {
+			onPageChange(n)
+			setJump("")
+		}
+	}
+
+	return (
+		<div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
+			<span className="text-xs text-muted-foreground">
+				{total} attacker{total === 1 ? "" : "s"}
+			</span>
+			<div className="ml-auto flex flex-wrap items-center gap-2">
+				<Button
+					variant="outline"
+					size="sm"
+					className="h-7 px-2 text-xs"
+					disabled={page <= 1}
+					onClick={() => onPageChange(Math.max(1, page - 1))}
+				>
+					Prev
+				</Button>
+				<span className="flex items-center gap-1 text-xs text-muted-foreground">
+					<input
+						type="number"
+						min={1}
+						max={totalPages}
+						value={jump}
+						onChange={(e) => setJump(e.target.value)}
+						onKeyDown={(e) => e.key === "Enter" && doJump()}
+						placeholder={String(page)}
+						className="h-7 w-14 rounded-md border bg-background px-1 text-center text-xs"
+					/>
+					/ {totalPages}
+				</span>
+				<Button
+					variant="outline"
+					size="sm"
+					className="h-7 px-2 text-xs"
+					disabled={page >= totalPages}
+					onClick={() => onPageChange(Math.min(totalPages, page + 1))}
+				>
+					Next
+				</Button>
+				<select
+					value={pageSize}
+					onChange={(e) => {
+						onPageSizeChange(Number(e.target.value))
+						onPageChange(1)
+					}}
+					className="h-7 rounded-md border bg-background px-1 text-xs"
+				>
+					{[10, 30, 50, 100].map((n) => (
+						<option key={n} value={n}>
+							{n} / page
+						</option>
+					))}
+				</select>
+			</div>
+		</div>
+	)
+}
+
 /** Collapsible rotation settings card */
 function RotationSettings({ onRotate }: { onRotate: (days: number) => void }) {
 	const [open, setOpen] = useState(false)
@@ -862,6 +943,18 @@ export default function SecurityPage() {
 							</div>
 						)}
 					</div>
+					{/* Pagination (top) */}
+					{!loading && attackers.length > 0 && (
+						<div className="border-t">
+							<PaginationBar
+								page={page}
+								pageSize={pageSize}
+								total={attackerTotal}
+								onPageChange={setPage}
+								onPageSizeChange={setPageSize}
+							/>
+						</div>
+					)}
 				</CardHeader>
 				<CardContent>
 					{loading ? (
@@ -894,49 +987,16 @@ export default function SecurityPage() {
 						</div>
 					)}
 				</CardContent>
-				{/* Pagination bar (only when there's more than one page) */}
+				{/* Pagination (bottom) */}
 				{!loading && attackers.length > 0 && (
-					<div className="flex flex-wrap items-center gap-3 border-t px-4 py-3">
-						<span className="text-xs text-muted-foreground">
-							{attackerTotal} attacker{attackerTotal === 1 ? "" : "s"}
-						</span>
-						<div className="ml-auto flex items-center gap-2">
-							<Button
-								variant="outline"
-								size="sm"
-								className="h-7 px-2 text-xs"
-								disabled={page <= 1}
-								onClick={() => setPage((p) => Math.max(1, p - 1))}
-							>
-								Prev
-							</Button>
-							<span className="text-xs text-muted-foreground">
-								{page} / {Math.max(1, Math.ceil(attackerTotal / pageSize))}
-							</span>
-							<Button
-								variant="outline"
-								size="sm"
-								className="h-7 px-2 text-xs"
-								disabled={page >= Math.ceil(attackerTotal / pageSize)}
-								onClick={() => setPage((p) => p + 1)}
-							>
-								Next
-							</Button>
-							<select
-								value={pageSize}
-								onChange={(e) => {
-									setPageSize(Number(e.target.value))
-									setPage(1)
-								}}
-								className="h-7 rounded-md border bg-background px-1 text-xs"
-							>
-								{[10, 30, 50, 100].map((n) => (
-									<option key={n} value={n}>
-										{n} / page
-									</option>
-								))}
-							</select>
-						</div>
+					<div className="border-t">
+						<PaginationBar
+							page={page}
+							pageSize={pageSize}
+							total={attackerTotal}
+							onPageChange={setPage}
+							onPageSizeChange={setPageSize}
+						/>
 					</div>
 				)}
 			</Card>
