@@ -1,4 +1,4 @@
-# example.com —— hermes dashboard 反代
+# beszel.example.com —— hermes dashboard 反代
 # 占位符：域名 / TLS 证书路径 / 认证设置按需替换。
 #
 # 认证架构（两层）：
@@ -18,7 +18,7 @@ map $http_cookie $has_hermes_session {
 server {
     listen 80;
     listen [::]:80;
-    server_name example.com;
+    server_name beszel.example.com;
 
     # ACME http-01 challenge if you use certbot/acme.sh
     location /.well-known/acme-challenge/ { root /var/www/html; }
@@ -28,7 +28,7 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
-    server_name example.com;
+    server_name beszel.example.com;
 
     ssl_certificate     /etc/nginx/ssl/example.com.crt;
     ssl_certificate_key /etc/nginx/ssl/example.com.key;

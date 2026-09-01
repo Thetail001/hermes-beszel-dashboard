@@ -89,7 +89,7 @@ curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/master/install.sh | 
 
 脚本最后会提示**一个手动步骤**：把 `BESZEL_SUPERUSER_EMAIL` 环境变量加进 hermes-dashboard 的 systemd user unit（`~/.config/systemd/user/hermes-dashboard.service` 的 `[Service]` 段）。这是 plugin_api.py 登录 beszel hub 需要的，漏了会白屏。
 
-**另一个关键手动步骤：nginx 反代**（install.sh 不负责，缺了远程 agent 连不上中心）。参考 [`hub/nginx-beszel.conf.example`](hub/nginx-beszel.conf.example)：
+**另一个关键手动步骤：nginx 反代**（install.sh 不负责，缺了远程 agent 连不上中心）。参考 [`hub/nginx-reverse-proxy.conf.example`](hub/nginx-reverse-proxy.conf.example)：
 
 - 会话 cookie 挡板：无 `hermes_session` cookie 的请求 302 到 `/login`
 - **放行 `/api/beszel/agent-connect`** → 反代 beszel hub `127.0.0.1:8090`（WebSocket Upgrade，agent 用 X-Token 认证）

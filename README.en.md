@@ -89,7 +89,7 @@ The script handles:
 
 The script ends with **one manual step**: add `BESZEL_SUPERUSER_EMAIL` to the hermes-dashboard systemd user unit (`~/.config/systemd/user/hermes-dashboard.service`, `[Service]` section). plugin_api.py needs it to log into the beszel hub — missing it blanks the tab.
 
-**Another critical manual step: nginx reverse proxy** (install.sh does not handle it; without it remote agents can't reach the centre). See [`hub/nginx-beszel.conf.example`](hub/nginx-beszel.conf.example):
+**Another critical manual step: nginx reverse proxy** (install.sh does not handle it; without it remote agents can't reach the centre). See [`hub/nginx-reverse-proxy.conf.example`](hub/nginx-reverse-proxy.conf.example):
 
 - Session cookie gate: requests without a `hermes_session` cookie get 302 → `/login`
 - **Allow `/api/beszel/agent-connect`** → proxy to beszel hub `127.0.0.1:8090` (WebSocket Upgrade; agent authenticates with X-Token)
