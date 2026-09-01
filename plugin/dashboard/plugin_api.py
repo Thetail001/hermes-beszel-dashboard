@@ -408,7 +408,8 @@ async def security_attackers(
     country: str = "",
     ip: str = "",
     sort: str = "recent",
-    limit: int = 100,
+    limit: int = 30,
+    offset: int = 0,
     machine_id: str = "",
 ):
     """Aggregated attacker cards for Level 1 view.
@@ -420,11 +421,13 @@ async def security_attackers(
       type:      filter by event_type
       country:   filter by country code
       ip:        filter by source IP
-      sort:      recent | count | first_seen
-      limit:     max results
+      sort:      recent (last activity) | count (most events) | newest (first seen)
+      limit:     page size (max 500)
+      offset:    page offset (0-based)
       machine_id: filter by machine (empty = all machines)
     """
-    limit = min(limit, 500)
+    limit = min(max(limit, 1), 500)
+    offset = max(offset, 0)
     conn = _sec_db()
     try:
         # Build time filter
@@ -451,13 +454,20 @@ async def security_attackers(
             filters += " AND machine_id = ?"
             params.append(machine_id)
 
-        # Sort mapping
+        # Sort mapping (labels on the front-end must mirror these semantics)
         sort_map = {
             "recent": "last_seen DESC",
             "count": "total_events DESC",
-            "first_seen": "first_seen ASC",
+            "newest": "first_seen DESC",
         }
         order = sort_map.get(sort, "last_seen DESC")
+
+        # Total matches (for pagination) — same WHERE, aggregated distinct IPs
+        total = conn.execute(
+            f"SELECT COUNT(DISTINCT src_ip) FROM security_events "
+            f"WHERE {time_cond} {filters}",
+            params,
+        ).fetchone()[0]
 
         sql = f"""
             SELECT
@@ -473,14 +483,13 @@ async def security_attackers(
             WHERE {time_cond} {filters}
             GROUP BY src_ip
             ORDER BY {order}
-            LIMIT ?
+            LIMIT ? OFFSET ?
         """
-        params.append(limit)
-
-        rows = conn.execute(sql, params).fetchall()
+        rows = conn.execute(sql, params + [limit, offset]).fetchall()
         return {
             "items": [dict(r) for r in rows],
             "count": len(rows),
+            "total": total,
         }
     finally:
         conn.close()
@@ -496,6 +505,7 @@ async def security_export(
     ip: str = "",
     sort: str = "recent",
     format: str = "json",
+    machine_id: str = "",
 ):
     """Export filtered events as JSON or CSV download."""
     conn = _sec_db()
@@ -518,11 +528,17 @@ async def security_export(
         if ip:
             filters += " AND src_ip = ?"
             params.append(ip)
+        if machine_id:
+            filters += " AND machine_id = ?"
+            params.append(machine_id)
 
+        # Export is an event stream (not aggregated), so sort by event time.
+        # Mirrors the attackers sort keys so the export follows the same
+        # filtering/ordering intent as the UI.
         sort_map = {
             "recent": "ts DESC",
             "count": "count DESC",
-            "first_seen": "ts ASC",
+            "newest": "ts DESC",
         }
         order = sort_map.get(sort, "ts DESC")
 

@@ -520,6 +520,12 @@ export default function SecurityPage() {
 	const [machines, setMachines] = useState<Machine[]>([])
 	const [loading, setLoading] = useState(true)
 
+	// Pagination (attackers list only — deliberately NOT part of buildQueryString,
+	// so it never leaks into events/export/summary, which must stay unpaginated)
+	const [page, setPage] = useState(1)
+	const [pageSize, setPageSize] = useState(30)
+	const [attackerTotal, setAttackerTotal] = useState(0)
+
 	// View state
 	const [effectLevel, setEffectLevel] = useState(2)
 	const [fusionMode, setFusionMode] = useState(false)
@@ -552,7 +558,12 @@ export default function SecurityPage() {
 				if (parsed.effectLevel !== undefined) setEffectLevel(parsed.effectLevel)
 				if (parsed.fusionMode !== undefined) setFusionMode(parsed.fusionMode)
 				if (parsed.refreshInterval !== undefined) setRefreshInterval(parsed.refreshInterval)
-				if (parsed.filter) setFilter((f) => ({ ...f, ...parsed.filter }))
+				if (parsed.filter) {
+					// migrate the old 'first_seen' sort key → 'newest'
+					const f = { ...parsed.filter }
+					if (f.sort === "first_seen") f.sort = "newest"
+					setFilter((cur) => ({ ...cur, ...f }))
+				}
 			} catch {}
 		}
 	}, [])
@@ -565,12 +576,19 @@ export default function SecurityPage() {
 		)
 	}, [effectLevel, fusionMode, refreshInterval, filter])
 
+	// Reset to page 1 whenever any filter changes (a new filter means a new
+	// result set — staying on page 5 of the old set would show stale/empty data).
+	useEffect(() => {
+		setPage(1)
+	}, [filter])
+
 	const fetchData = () => {
 		setLoading(true)
 		const qs = buildQueryString(filter)
+		const offset = (page - 1) * pageSize
 		Promise.all([
 			fetch(`/api/plugins/beszel/security/events?limit=50&${qs}`).then((r) => r.json()),
-			fetch(`/api/plugins/beszel/security/attackers?${qs}`).then((r) => r.json()),
+			fetch(`/api/plugins/beszel/security/attackers?${qs}&limit=${pageSize}&offset=${offset}`).then((r) => r.json()),
 			fetch(`/api/plugins/beszel/security/bans/current?${qs}`).then((r) => r.json()),
 			fetch(`/api/plugins/beszel/security/stats/summary?${qs}`).then((r) => r.json()),
 			fetch("/api/plugins/beszel/security/machines").then((r) => r.json()),
@@ -578,6 +596,7 @@ export default function SecurityPage() {
 			.then(([ev, at, bn, sm, mc]) => {
 				setEvents(ev.items || [])
 				setAttackers(at.items || [])
+				setAttackerTotal(at.total ?? (at.items || []).length)
 				setBans(bn.items || [])
 				setSummary(sm)
 				setMachines(mc.items || [])
@@ -588,7 +607,7 @@ export default function SecurityPage() {
 	// Initial load + filter changes
 	useEffect(() => {
 		fetchData()
-	}, [filter])
+	}, [filter, page, pageSize])
 
 	// Auto-refresh polling
 	useEffect(() => {
@@ -802,9 +821,9 @@ export default function SecurityPage() {
 							onChange={(e) => setFilter((f) => ({ ...f, sort: e.target.value }))}
 							className="h-8 rounded-md border bg-background px-2 text-xs"
 						>
-							<option value="recent">Most recent</option>
-							<option value="count">Most active</option>
-							<option value="first_seen">Newest first</option>
+							<option value="recent">Last active</option>
+							<option value="count">Most events</option>
+							<option value="newest">Newest attacker</option>
 						</select>
 						{machines.length > 1 && (
 							<select
@@ -875,6 +894,51 @@ export default function SecurityPage() {
 						</div>
 					)}
 				</CardContent>
+				{/* Pagination bar (only when there's more than one page) */}
+				{!loading && attackers.length > 0 && (
+					<div className="flex flex-wrap items-center gap-3 border-t px-4 py-3">
+						<span className="text-xs text-muted-foreground">
+							{attackerTotal} attacker{attackerTotal === 1 ? "" : "s"}
+						</span>
+						<div className="ml-auto flex items-center gap-2">
+							<Button
+								variant="outline"
+								size="sm"
+								className="h-7 px-2 text-xs"
+								disabled={page <= 1}
+								onClick={() => setPage((p) => Math.max(1, p - 1))}
+							>
+								Prev
+							</Button>
+							<span className="text-xs text-muted-foreground">
+								{page} / {Math.max(1, Math.ceil(attackerTotal / pageSize))}
+							</span>
+							<Button
+								variant="outline"
+								size="sm"
+								className="h-7 px-2 text-xs"
+								disabled={page >= Math.ceil(attackerTotal / pageSize)}
+								onClick={() => setPage((p) => p + 1)}
+							>
+								Next
+							</Button>
+							<select
+								value={pageSize}
+								onChange={(e) => {
+									setPageSize(Number(e.target.value))
+									setPage(1)
+								}}
+								className="h-7 rounded-md border bg-background px-1 text-xs"
+							>
+								{[10, 30, 50, 100].map((n) => (
+									<option key={n} value={n}>
+										{n} / page
+									</option>
+								))}
+							</select>
+						</div>
+					</div>
+				)}
 			</Card>
 
 			{/* Rotation settings */}

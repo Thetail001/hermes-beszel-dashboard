@@ -378,7 +378,13 @@
 > 	const [attackers, setAttackers] = useState<Attacker[]>([])
 162a520
 > 	const [machines, setMachines] = useState<Machine[]>([])
-164a523,560
+164a523,552
+> 	// Pagination (attackers list only — deliberately NOT part of buildQueryString,
+> 	// so it never leaks into events/export/summary, which must stay unpaginated)
+> 	const [page, setPage] = useState(1)
+> 	const [pageSize, setPageSize] = useState(30)
+> 	const [attackerTotal, setAttackerTotal] = useState(0)
+> 
 > 	// View state
 > 	const [effectLevel, setEffectLevel] = useState(2)
 > 	const [fusionMode, setFusionMode] = useState(false)
@@ -403,7 +409,7 @@
 > 	const [selectedIp, setSelectedIp] = useState<string | null>(null)
 > 
 > 	// Load persisted view state
-> 	useEffect(() => {
+165a554,588
 > 		const saved = localStorage.getItem("beszel-security-view")
 > 		if (saved) {
 > 			try {
@@ -411,41 +417,54 @@
 > 				if (parsed.effectLevel !== undefined) setEffectLevel(parsed.effectLevel)
 > 				if (parsed.fusionMode !== undefined) setFusionMode(parsed.fusionMode)
 > 				if (parsed.refreshInterval !== undefined) setRefreshInterval(parsed.refreshInterval)
-> 				if (parsed.filter) setFilter((f) => ({ ...f, ...parsed.filter }))
+> 				if (parsed.filter) {
+> 					// migrate the old 'first_seen' sort key → 'newest'
+> 					const f = { ...parsed.filter }
+> 					if (f.sort === "first_seen") f.sort = "newest"
+> 					setFilter((cur) => ({ ...cur, ...f }))
+> 				}
 > 			} catch {}
 > 		}
 > 	}, [])
 > 
 > 	// Persist view state
-165a562,570
+> 	useEffect(() => {
 > 		localStorage.setItem(
 > 			"beszel-security-view",
 > 			JSON.stringify({ effectLevel, fusionMode, refreshInterval, filter })
 > 		)
 > 	}, [effectLevel, fusionMode, refreshInterval, filter])
 > 
+> 	// Reset to page 1 whenever any filter changes (a new filter means a new
+> 	// result set — staying on page 5 of the old set would show stale/empty data).
+> 	useEffect(() => {
+> 		setPage(1)
+> 	}, [filter])
+> 
 > 	const fetchData = () => {
 > 		setLoading(true)
 > 		const qs = buildQueryString(filter)
-167,169c572,576
+> 		const offset = (page - 1) * pageSize
+167,169c590,594
 < 			fetch("/api/plugins/beszel/security/events?limit=50").then((r) => r.json()),
 < 			fetch("/api/plugins/beszel/security/bans/current").then((r) => r.json()),
 < 			fetch("/api/plugins/beszel/security/stats/summary?period=24h").then((r) => r.json()),
 ---
 > 			fetch(`/api/plugins/beszel/security/events?limit=50&${qs}`).then((r) => r.json()),
-> 			fetch(`/api/plugins/beszel/security/attackers?${qs}`).then((r) => r.json()),
+> 			fetch(`/api/plugins/beszel/security/attackers?${qs}&limit=${pageSize}&offset=${offset}`).then((r) => r.json()),
 > 			fetch(`/api/plugins/beszel/security/bans/current?${qs}`).then((r) => r.json()),
 > 			fetch(`/api/plugins/beszel/security/stats/summary?${qs}`).then((r) => r.json()),
 > 			fetch("/api/plugins/beszel/security/machines").then((r) => r.json()),
-171c578
+171c596
 < 			.then(([ev, bn, sm]) => {
 ---
 > 			.then(([ev, at, bn, sm, mc]) => {
-172a580
+172a598,599
 > 				setAttackers(at.items || [])
-174a583
+> 				setAttackerTotal(at.total ?? (at.items || []).length)
+174a602
 > 				setMachines(mc.items || [])
-177c586,628
+177c605,647
 < 	}, [])
 ---
 > 	}
@@ -453,7 +472,7 @@
 > 	// Initial load + filter changes
 > 	useEffect(() => {
 > 		fetchData()
-> 	}, [filter])
+> 	}, [filter, page, pageSize])
 > 
 > 	// Auto-refresh polling
 > 	useEffect(() => {
@@ -491,9 +510,9 @@
 > 			/>
 > 		)
 > 	}
-180a632
+180a651
 > 			{/* Header */}
-184a637,681
+184a656,700
 > 				<div className="flex items-center gap-4">
 > 					<div className="flex items-center gap-2">
 > 						<Label className="text-xs"><Trans>Refresh</Trans></Label>
@@ -539,57 +558,57 @@
 > 						</div>
 > 					</div>
 > 				</div>
-187c684
+187c703
 < 			{/* stats cards */}
 ---
 > 			{/* Stats cards */}
-191,193c688
+191,193c707
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>Active Bans</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Active Bans</Trans></CardTitle>
-197,199c692
+197,199c711
 < 						<p className="text-xs text-muted-foreground">
 < 							<Trans>Currently banned IPs</Trans>
 < 						</p>
 ---
 > 						<p className="text-xs text-muted-foreground"><Trans>Currently banned IPs</Trans></p>
-204,206c697
+204,206c716
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>24h Events</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Events</Trans></CardTitle>
-215,217c706
+215,217c725
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>Unique IPs</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Unique IPs</Trans></CardTitle>
-221,223c710
+221,223c729
 < 						<p className="text-xs text-muted-foreground">
 < 							<Trans>Distinct source IPs in 24h</Trans>
 < 						</p>
 ---
 > 						<p className="text-xs text-muted-foreground"><Trans>Distinct source IPs</Trans></p>
-228,230c715
+228,230c734
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>Event Types</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Event Types</Trans></CardTitle>
-238c723
+238c742
 < 			{/* current bans */}
 ---
 > 			{/* Attack map */}
-241,243c726
+241,243c745
 < 					<CardTitle>
 < 						<Trans>Active Bans</Trans>
 < 					</CardTitle>
 ---
 > 					<CardTitle><Trans>Attack Map</Trans></CardTitle>
-246,249c729,740
+246,249c748,759
 < 					{bans.length === 0 ? (
 < 						<div className="py-8 text-center text-muted-foreground">
 < 							<Trans>No active bans.</Trans>
@@ -607,7 +626,7 @@
 > 				<CardContent>
 > 					{filteredBans.length === 0 ? (
 > 						<div className="py-8 text-center text-muted-foreground"><Trans>No active bans.</Trans></div>
-251,276c742,750
+251,276c761,769
 < 						<Table>
 < 							<TableHeader>
 < 								<TableRow>
@@ -644,11 +663,11 @@
 > 								</div>
 > 							))}
 > 						</div>
-281c755
+281c774
 < 			{/* event stream */}
 ---
 > 			{/* Attackers (Level 1) with integrated filter bar */}
-283,286c757,845
+283,286c776,864
 < 				<CardHeader>
 < 					<CardTitle>
 < 						<Trans>Event Stream</Trans>
@@ -702,9 +721,9 @@
 > 							onChange={(e) => setFilter((f) => ({ ...f, sort: e.target.value }))}
 > 							className="h-8 rounded-md border bg-background px-2 text-xs"
 > 						>
-> 							<option value="recent">Most recent</option>
-> 							<option value="count">Most active</option>
-> 							<option value="first_seen">Newest first</option>
+> 							<option value="recent">Last active</option>
+> 							<option value="count">Most events</option>
+> 							<option value="newest">Newest attacker</option>
 > 						</select>
 > 						{machines.length > 1 && (
 > 							<select
@@ -743,7 +762,7 @@
 > 							</div>
 > 						)}
 > 					</div>
-290,291c849,874
+290,291c868,893
 < 						<div className="py-8 text-center text-muted-foreground">
 < 							<Trans>Loading...</Trans>
 ---
@@ -773,9 +792,58 @@
 > 									</div>
 > 								</div>
 > 							))}
-292a876,982
+293,295c895,938
+< 					) : events.length === 0 ? (
+< 						<div className="py-8 text-center text-muted-foreground">
+< 							<Trans>No security events recorded.</Trans>
+---
 > 					)}
 > 				</CardContent>
+> 				{/* Pagination bar (only when there's more than one page) */}
+> 				{!loading && attackers.length > 0 && (
+> 					<div className="flex flex-wrap items-center gap-3 border-t px-4 py-3">
+> 						<span className="text-xs text-muted-foreground">
+> 							{attackerTotal} attacker{attackerTotal === 1 ? "" : "s"}
+> 						</span>
+> 						<div className="ml-auto flex items-center gap-2">
+> 							<Button
+> 								variant="outline"
+> 								size="sm"
+> 								className="h-7 px-2 text-xs"
+> 								disabled={page <= 1}
+> 								onClick={() => setPage((p) => Math.max(1, p - 1))}
+> 							>
+> 								Prev
+> 							</Button>
+> 							<span className="text-xs text-muted-foreground">
+> 								{page} / {Math.max(1, Math.ceil(attackerTotal / pageSize))}
+> 							</span>
+> 							<Button
+> 								variant="outline"
+> 								size="sm"
+> 								className="h-7 px-2 text-xs"
+> 								disabled={page >= Math.ceil(attackerTotal / pageSize)}
+> 								onClick={() => setPage((p) => p + 1)}
+> 							>
+> 								Next
+> 							</Button>
+> 							<select
+> 								value={pageSize}
+> 								onChange={(e) => {
+> 									setPageSize(Number(e.target.value))
+> 									setPage(1)
+> 								}}
+> 								className="h-7 rounded-md border bg-background px-1 text-xs"
+> 							>
+> 								{[10, 30, 50, 100].map((n) => (
+> 									<option key={n} value={n}>
+> 										{n} / page
+> 									</option>
+> 								))}
+> 							</select>
+296a940,1048
+> 					</div>
+> 				)}
 > 			</Card>
 > 
 > 			{/* Rotation settings */}
@@ -881,13 +949,9 @@
 > 				<CardContent>
 > 					{loading && events.length === 0 ? (
 > 						<div className="py-8 text-center text-muted-foreground"><Trans>Loading...</Trans></div>
-294,296c984
-< 						<div className="py-8 text-center text-muted-foreground">
-< 							<Trans>No security events recorded.</Trans>
-< 						</div>
----
+> 					) : events.length === 0 ? (
 > 						<div className="py-8 text-center text-muted-foreground"><Trans>No events for this IP.</Trans></div>
-299,315c987,1018
+299,315c1051,1082
 < 							{events.map((ev) => (
 < 								<div
 < 									key={ev.id}
@@ -938,14 +1002,14 @@
 > 												) : null
 > 											})}
 > 										</div>
-317,322d1019
+317,322d1083
 < 									{ev.count > 1 && (
 < 										<span className="text-muted-foreground">×{ev.count}</span>
 < 									)}
 < 									<span className="ml-auto text-xs text-muted-foreground">
 < 										{timeAgo(ev.ts)}
 < 									</span>
-324a1022,1031
+324a1086,1095
 > 							{hasMore && (
 > 								<Button
 > 									variant="outline"
