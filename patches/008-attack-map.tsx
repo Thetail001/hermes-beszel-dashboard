@@ -607,6 +607,14 @@ export default function SecurityPage() {
 	const [pageSize, setPageSize] = useState(30)
 	const [attackerTotal, setAttackerTotal] = useState(0)
 
+	// Bans list — independent filter/sort/pagination (bans have their own
+	// dimensions: jail/ip/banned_at, no period/country/type aggregation)
+	const [bansFilter, setBansFilter] = useState({ ip: "", jail: "", sort: "recent" })
+	const [bansQuery, setBansQuery] = useState("")
+	const [bansPage, setBansPage] = useState(1)
+	const [bansPageSize, setBansPageSize] = useState(30)
+	const [bansTotal, setBansTotal] = useState(0)
+
 	// View state
 	const [effectLevel, setEffectLevel] = useState(2)
 	const [fusionMode, setFusionMode] = useState(false)
@@ -670,19 +678,36 @@ export default function SecurityPage() {
 		Promise.all([
 			fetch(`/api/plugins/beszel/security/events?limit=50&${qs}`).then((r) => r.json()),
 			fetch(`/api/plugins/beszel/security/attackers?${qs}&limit=${pageSize}&offset=${offset}`).then((r) => r.json()),
-			fetch(`/api/plugins/beszel/security/bans/current?${qs}`).then((r) => r.json()),
 			fetch(`/api/plugins/beszel/security/stats/summary?${qs}`).then((r) => r.json()),
 			fetch("/api/plugins/beszel/security/machines").then((r) => r.json()),
 		])
-			.then(([ev, at, bn, sm, mc]) => {
+			.then(([ev, at, sm, mc]) => {
 				setEvents(ev.items || [])
 				setAttackers(at.items || [])
 				setAttackerTotal(at.total ?? (at.items || []).length)
-				setBans(bn.items || [])
 				setSummary(sm)
 				setMachines(mc.items || [])
 			})
 			.finally(() => setLoading(false))
+	}
+
+	// Bans are fetched separately — they have their own filter/sort/pagination
+	// dimensions and must not share the attackers' buildQueryString (which would
+	// leak period/country/type params the bans endpoint ignores).
+	const fetchBans = () => {
+		const p = new URLSearchParams()
+		if (bansFilter.ip) p.set("ip", bansFilter.ip)
+		if (bansFilter.jail) p.set("jail", bansFilter.jail)
+		p.set("sort", bansFilter.sort)
+		p.set("limit", String(bansPageSize))
+		p.set("offset", String((bansPage - 1) * bansPageSize))
+		if (filter.machine_id) p.set("machine_id", filter.machine_id)
+		fetch(`/api/plugins/beszel/security/bans/current?${p}`)
+			.then((r) => r.json())
+			.then((d) => {
+				setBans(d.items || [])
+				setBansTotal(d.total ?? (d.items || []).length)
+			})
 	}
 
 	// Initial load + filter changes
@@ -690,16 +715,36 @@ export default function SecurityPage() {
 		fetchData()
 	}, [filter, page, pageSize])
 
+	// Bans: refetch on bans-filter/sort/pagination or machine change
+	useEffect(() => {
+		fetchBans()
+	}, [bansFilter, bansPage, bansPageSize, filter.machine_id])
+
 	// Auto-refresh polling
 	useEffect(() => {
 		if (refreshInterval <= 0) return
-		const id = setInterval(fetchData, refreshInterval * 1000)
+		const id = setInterval(() => {
+			fetchData()
+			fetchBans()
+		}, refreshInterval * 1000)
 		return () => clearInterval(id)
 	}, [refreshInterval])
 
 	const handleQuerySubmit = () => {
 		const parsed = parseQueryInput(queryInput)
 		setFilter((f) => ({ ...f, ...parsed }))
+	}
+
+	const handleBansQuerySubmit = () => {
+		const out: { ip: string; jail: string } = { ip: "", jail: "" }
+		for (const part of bansQuery.trim().split(/\s+/)) {
+			const [key, val] = part.split(":", 2)
+			if (!val) continue
+			if (key === "ip") out.ip = val
+			if (key === "jail") out.jail = val
+		}
+		setBansFilter((f) => ({ ...f, ...out }))
+		setBansPage(1)
 	}
 
 	const handleExport = (format: "json" | "csv") => {
@@ -711,11 +756,6 @@ export default function SecurityPage() {
 		// Refresh data after rotation
 		fetchData()
 	}
-
-	// Filter bans by current filter
-	const filteredBans = filter.ip
-		? bans.filter((b) => b.ip === filter.ip)
-		: bans
 
 	// If an IP is selected, show Level 2
 	if (selectedIp) {
@@ -832,16 +872,75 @@ export default function SecurityPage() {
 
 			{/* Active bans */}
 			<Card>
-				<CardHeader>
+				<CardHeader className="space-y-3">
 					<CardTitle><Trans>Active Bans</Trans></CardTitle>
+					<div className="flex flex-wrap items-center gap-3 border-t pt-3">
+						<div className="flex items-center gap-2">
+							<Input
+								placeholder="ip:1.2.3.4 jail:sshd"
+								value={bansQuery}
+								onChange={(e) => setBansQuery(e.target.value)}
+								onKeyDown={(e) => e.key === "Enter" && handleBansQuerySubmit()}
+								className="h-8 w-64 text-xs"
+							/>
+							<Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleBansQuerySubmit}>
+								<Trans>Query</Trans>
+							</Button>
+						</div>
+						<select
+							value={bansFilter.sort}
+							onChange={(e) => {
+								setBansFilter((f) => ({ ...f, sort: e.target.value }))
+								setBansPage(1)
+							}}
+							className="h-8 rounded-md border bg-background px-2 text-xs"
+						>
+							<option value="recent">Recently banned</option>
+							<option value="oldest">Oldest ban</option>
+							<option value="ip">By IP</option>
+							<option value="jail">By jail</option>
+						</select>
+						{(bansFilter.ip || bansFilter.jail) && (
+							<div className="flex items-center gap-1">
+								{bansFilter.ip && (
+									<Badge variant="secondary" className="text-xs">
+										ip:{bansFilter.ip}
+										<button className="ml-1" onClick={() => setBansFilter((f) => ({ ...f, ip: "" }))}>×</button>
+									</Badge>
+								)}
+								{bansFilter.jail && (
+									<Badge variant="secondary" className="text-xs">
+										jail:{bansFilter.jail}
+										<button className="ml-1" onClick={() => setBansFilter((f) => ({ ...f, jail: "" }))}>×</button>
+									</Badge>
+								)}
+							</div>
+						)}
+					</div>
+					{/* Pagination (top) */}
+					{bans.length > 0 && (
+						<div className="border-t">
+							<PaginationBar
+								page={bansPage}
+								pageSize={bansPageSize}
+								total={bansTotal}
+								onPageChange={setBansPage}
+								onPageSizeChange={setBansPageSize}
+							/>
+						</div>
+					)}
 				</CardHeader>
 				<CardContent>
-					{filteredBans.length === 0 ? (
+					{bans.length === 0 ? (
 						<div className="py-8 text-center text-muted-foreground"><Trans>No active bans.</Trans></div>
 					) : (
 						<div className="space-y-1">
-							{filteredBans.map((b) => (
-								<div key={b.id} className="flex items-center gap-3 rounded-md border px-3 py-2 text-sm">
+							{bans.map((b) => (
+								<div
+									key={b.id}
+									className="flex cursor-pointer items-center gap-3 rounded-md border px-3 py-2 text-sm transition-colors hover:bg-muted/50"
+									onClick={() => setSelectedIp(b.ip)}
+								>
 									<Badge variant="destructive">{b.jail}</Badge>
 									<span className="font-mono">{b.ip}</span>
 									<span className="ml-auto text-xs text-muted-foreground">{timeAgo(b.banned_at)}</span>
@@ -850,6 +949,18 @@ export default function SecurityPage() {
 						</div>
 					)}
 				</CardContent>
+				{/* Pagination (bottom) */}
+				{bans.length > 0 && (
+					<div className="border-t">
+						<PaginationBar
+							page={bansPage}
+							pageSize={bansPageSize}
+							total={bansTotal}
+							onPageChange={setBansPage}
+							onPageSizeChange={setBansPageSize}
+						/>
+					</div>
+				)}
 			</Card>
 
 			{/* Attackers (Level 1) with integrated filter bar */}

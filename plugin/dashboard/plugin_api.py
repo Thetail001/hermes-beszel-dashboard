@@ -324,22 +324,59 @@ async def security_events(
 
 
 @router.get("/security/bans/current")
-async def security_bans_current(machine_id: str = ""):
-    """Currently active bans (unbanned_at IS NULL). Optionally per-machine."""
+async def security_bans_current(
+    machine_id: str = "",
+    ip: str = "",
+    jail: str = "",
+    sort: str = "recent",
+    limit: int = 30,
+    offset: int = 0,
+):
+    """Currently active bans (unbanned_at IS NULL), filterable and paginated.
+
+    Query params:
+      machine_id: filter by machine (empty = all machines)
+      ip:         filter by banned IP (exact)
+      jail:       filter by fail2ban jail (exact)
+      sort:       recent (last banned) | oldest (first banned) | ip | jail
+      limit:      page size (max 500)
+      offset:     page offset (0-based)
+    """
+    limit = min(max(limit, 1), 500)
+    offset = max(offset, 0)
     conn = _sec_db()
     try:
+        conds = ["unbanned_at IS NULL"]
+        params: list = []
         if machine_id:
-            rows = conn.execute(
-                "SELECT * FROM security_bans WHERE unbanned_at IS NULL "
-                "AND machine_id = ? ORDER BY banned_at DESC",
-                (machine_id,),
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                "SELECT * FROM security_bans WHERE unbanned_at IS NULL "
-                "ORDER BY banned_at DESC"
-            ).fetchall()
-        return {"items": [dict(r) for r in rows]}
+            conds.append("machine_id = ?")
+            params.append(machine_id)
+        if ip:
+            conds.append("ip = ?")
+            params.append(ip)
+        if jail:
+            conds.append("jail = ?")
+            params.append(jail)
+        where = " AND ".join(conds)
+
+        sort_map = {
+            "recent": "banned_at DESC",
+            "oldest": "banned_at ASC",
+            "ip": "ip ASC",
+            "jail": "jail ASC, banned_at DESC",
+        }
+        order = sort_map.get(sort, "banned_at DESC")
+
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM security_bans WHERE {where}", params
+        ).fetchone()[0]
+
+        rows = conn.execute(
+            f"SELECT * FROM security_bans WHERE {where} "
+            f"ORDER BY {order} LIMIT ? OFFSET ?",
+            params + [limit, offset],
+        ).fetchall()
+        return {"items": [dict(r) for r in rows], "count": len(rows), "total": total}
     finally:
         conn.close()
 
