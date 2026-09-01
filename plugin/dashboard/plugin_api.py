@@ -704,20 +704,28 @@ _LEN = {"jail": 100, "uri": 2048, "ua": 512, "username": 100, "raw_excerpt": 512
 
 
 # ---------------------------------------------------------------- token auth
-# The ingest token is beszel's universal token (managed in the beszel web UI at
-# /settings/tokens), NOT a separate per-machine secret. On each ingest we:
-#   1. verify the bearer token is an active beszel universal token (via PB API)
-#   2. verify the agent's self-reported machine_id exists in beszel's systems table
-# This reuses beszel's own identity/credential model end-to-end: one token in the
-# web UI, machines identified by their beszel system name.
+# The ingest token is one of two things, both managed in the beszel web UI:
+#   * a **per-system token** (UUID, created by "Add System") — lives in the
+#     `fingerprints` table, uniquely bound to one system. We resolve the machine
+#     name from it via `expand=system`, so the agent cannot spoof another machine.
+#   * a **universal token** (created in /settings/tokens) — lives in the
+#     `universal_tokens` table, user-scoped and shared by any number of machines.
+#     It only proves "is one of us"; the machine_id must be self-reported and
+#     checked against the systems table.
+#
+# Order matters: check universal_tokens FIRST. A universal token that has been
+# used to auto-register machines also appears in `fingerprints` (one row per
+# machine), so resolving it from fingerprints would be ambiguous. Per-system
+# tokens never appear in universal_tokens, so the fallback is unambiguous.
 
-# Cached snapshot of beszel's universal tokens + system names, refreshed on a TTL.
+# Cached snapshot of beszel's token/identity tables, refreshed on a TTL.
 # verify_token() is synchronous (framework requirement) and runs on every ingest,
 # so we never hit the PB API synchronously — the cache is warmed lazily and
 # re-read on a short TTL.
 _beszel_auth_cache = {
-    "tokens": set(),
-    "systems": set(),      # system NAMES (what the agent reports as machine_id)
+    "universal_tokens": set(),        # universal token values
+    "per_system": {},                 # {per-system-token: machine_name}
+    "systems": set(),                 # system NAMES (for universal-token self-report)
     "ts": 0.0,
     "lock": threading.Lock(),
 }
@@ -725,10 +733,10 @@ _AUTH_TTL = 60.0  # seconds
 
 
 def _refresh_beszel_auth():
-    """Refresh the cached universal-token set + system-name set from beszel PB.
+    """Refresh the cached token/identity snapshot from beszel PB.
 
     On any failure the previous cache is kept (fail-closed: an empty cache
-    rejects everything, but we only ever shrink it on a successful read)."""
+    rejects everything, but we only ever replace it on a successful read)."""
     now = time.time()
     cache = _beszel_auth_cache
     if now - cache["ts"] < _AUTH_TTL:
@@ -738,30 +746,57 @@ def _refresh_beszel_auth():
     except HTTPException:
         return
     try:
+        # universal tokens
         req = urllib.request.Request(
             f"{HUB}/api/collections/universal_tokens/records?perPage=500",
             headers={"Authorization": tok},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            tokens = {r.get("token", "") for r in json.loads(resp.read()).get("items", [])}
+            universal = {r.get("token", "") for r in json.loads(resp.read()).get("items", [])}
+
+        # systems (names, for the universal-token self-report path)
         req = urllib.request.Request(
             f"{HUB}/api/collections/systems/records?perPage=500",
             headers={"Authorization": tok},
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             systems = {r.get("name", "") for r in json.loads(resp.read()).get("items", [])}
+
+        # per-system tokens: {token: system name}, but EXCLUDE any token that is
+        # also a universal token (those are ambiguous — one universal token can
+        # back several machines). expand=system gives us the name directly.
+        req = urllib.request.Request(
+            f"{HUB}/api/collections/fingerprints/records?perPage=500&expand=system",
+            headers={"Authorization": tok},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            per_system = {}
+            for r in json.loads(resp.read()).get("items", []):
+                tk = r.get("token", "")
+                name = (r.get("expand", {}).get("system") or {}).get("name", "")
+                if tk and name and tk not in universal:
+                    per_system[tk] = name
     except Exception:
         return  # keep the previous cache on any error
     with cache["lock"]:
-        cache["tokens"] = tokens
+        cache["universal_tokens"] = universal
+        cache["per_system"] = per_system
         cache["systems"] = systems
         cache["ts"] = now
 
 
-def _is_universal_token(token: str) -> bool:
+def _resolve_token(token: str) -> str | None:
+    """Map a bearer token to a machine_id (or None if unknown).
+
+    Returns the machine name for a per-system token, the sentinel
+    'authenticated-agent' for a universal token (machine_id resolved later from
+    the request body), or None if the token is not recognised."""
     _refresh_beszel_auth()
     with _beszel_auth_cache["lock"]:
-        return token in _beszel_auth_cache["tokens"]
+        cache = _beszel_auth_cache
+        if token in cache["universal_tokens"]:
+            return "authenticated-agent"
+        return cache["per_system"].get(token)
 
 
 def _is_known_system(name: str) -> bool:
@@ -788,12 +823,14 @@ def _make_ingest_provider():
             token = (token or "").strip()
             if not token:
                 return None
-            if not _is_universal_token(token):
+            resolved = _resolve_token(token)
+            if resolved is None:
                 return None
-            # principal is a placeholder — the real machine_id is taken from the
-            # request body and checked against beszel's systems table in ingest.
+            # principal is either the resolved machine name (per-system token) or
+            # the sentinel "authenticated-agent" (universal token — the real
+            # machine_id is taken from the request body + systems table in ingest).
             return TokenPrincipal(
-                principal="authenticated-agent",
+                principal=resolved,
                 provider=self.name,
                 scopes=("security:ingest",),
             )
@@ -1015,12 +1052,18 @@ async def security_ingest(request: Request):
     if len(events) > _MAX_BATCH:
         raise HTTPException(400, f"batch too large (max {_MAX_BATCH})")
 
-    # machine_id is self-reported, but must be a beszel-registered system name.
-    machine_id = body.get("machine_id") if isinstance(body, dict) else None
-    if not isinstance(machine_id, str) or not machine_id:
-        raise HTTPException(400, "machine_id is required")
-    if not _is_known_system(machine_id):
-        raise HTTPException(401, "unknown machine_id")
+    # Resolve the machine identity.
+    #   * per-system token → principal IS the machine name (locked, no self-report)
+    #   * universal token → principal is the sentinel; machine_id must be
+    #     self-reported and equal a beszel-registered system name.
+    if principal.principal == "authenticated-agent":
+        machine_id = body.get("machine_id") if isinstance(body, dict) else None
+        if not isinstance(machine_id, str) or not machine_id:
+            raise HTTPException(400, "machine_id is required")
+        if not _is_known_system(machine_id):
+            raise HTTPException(401, "unknown machine_id")
+    else:
+        machine_id = principal.principal
 
     conn = _sec_db()
     accepted = rejected = 0
