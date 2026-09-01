@@ -60,7 +60,9 @@ info "  打包完成: $TARBALL ($(du -h "$TARBALL" | cut -f1))"
 info "创建 GitHub Release $TAG..."
 if gh release view "$TAG" >/dev/null 2>&1; then
   warn "  release $TAG 已存在，删除后重建"
-  gh release delete "$TAG" --yes || fail "删除旧 release 失败"
+  # --cleanup-tag 同时删 git tag，否则 tag 永远停在首次发布时的旧 commit，
+  # 重新 create 会复用旧 tag，导致 tag 源码与附件不一致。
+  gh release delete "$TAG" --yes --cleanup-tag || fail "删除旧 release 失败"
 fi
 
 # beta/rc/alpha/pre 版本自动标记为 prerelease
