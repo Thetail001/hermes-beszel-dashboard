@@ -24,6 +24,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
 info() { printf '\033[32m[+] %s\033[0m\n' "$*"; }
+warn() { printf '\033[33m[!] %s\033[0m\n' "$*"; }
 fail() { printf '\033[31m[x] %s\033[0m\n' "$*" >&2; exit 1; }
 
 command -v gh >/dev/null 2>&1 || fail "需要 gh CLI"
@@ -51,7 +52,8 @@ info "  构建产物已放入 plugin/dashboard/dist/"
 # ---------------------------------------------------------------- 2. 打包
 info "打包插件目录..."
 TARBALL="beszel-dashboard-plugin.tar.gz"
-tar -czf "$TARBALL" -C plugin dashboard
+# --exclude 排除 python 编译缓存（tar 不读 .gitignore，需显式排除）
+tar -czf "$TARBALL" -C plugin --exclude='__pycache__' --exclude='*.pyc' dashboard
 info "  打包完成: $TARBALL ($(du -h "$TARBALL" | cut -f1))"
 
 # ---------------------------------------------------------------- 3. 创建 release
