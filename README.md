@@ -1,6 +1,8 @@
 # hermes-beszel-dashboard
 
 > **一个 [Hermes Agent](https://github.com/NousResearch/hermes-agent) dashboard 插件**：把 [beszel](https://github.com/henrygd/beszel)（轻量服务器监控）的整个面板搬进 Hermes 的 dashboard，并在其上叠加一个多机**监控室**（SSH 爆破 / fail2ban / nginx 扫描的采集、聚合、地理定位与攻击地图）。English README: [README.en.md](README.en.md)
+> <img width="1850" height="977" alt="屏幕截图 2026-09-01 214340" src="https://github.com/user-attachments/assets/a6c52546-2e05-40e2-bb5d-07da0ca527b6" />
+
 
 **这不是一个独立应用**，它以插件形式存在，随 hermes 一起运行：
 
