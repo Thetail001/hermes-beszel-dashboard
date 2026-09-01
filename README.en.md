@@ -47,7 +47,10 @@ Control host:      beszel hub (PocketBase)   token auth + idempotent UPSERT + Ge
 │   ├── 001..007-*.patch        #   reverse-proxy baseURL, strip beszel login, tab wiring…
 │   ├── 007-security-ui-enhancements.tsx   # full front-end snapshot after patch 007
 │   ├── 008-attack-map.patch    #   attack map + machine list via security/machines
-│   └── 008-attack-map.tsx      #   current full front-end snapshot (base for the next patch)
+│   ├── 008-attack-map.tsx      #   full front-end snapshot after 008 (base for the next patch)
+│   ├── 009-install-command.patch  # copy-install-command now exports this project's installer (Linux/brew/freebsd)
+│   ├── 010-machine-selector.patch # machine selector moved from the Attackers card to the top header (global)
+│   └── 010-machine-selector.tsx    # full front-end snapshot after 010 (current base)
 ├── plugin/
 │   ├── manifest.json           # hermes plugin manifest
 │   └── dashboard/

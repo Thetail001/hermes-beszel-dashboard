@@ -47,7 +47,10 @@
 │   ├── 001..007-*.patch        #   反代 baseURL、去 beszel 登录页、tab 接入等
 │   ├── 007-security-ui-enhancements.tsx   # 007 补丁应用后的完整前端快照
 │   ├── 008-attack-map.patch    #   攻击地图 + 机器列表接入 security/machines
-│   └── 008-attack-map.tsx      #   当前完整前端快照（重放下一个补丁的基底）
+│   ├── 008-attack-map.tsx      #   008 应用后的完整前端快照（下一个补丁的基底）
+│   ├── 009-install-command.patch  # 复制安装命令改导出本项目安装器（Linux/brew/freebsd）
+│   ├── 010-machine-selector.patch # 机器选择条从 Attackers 面板移到顶部 Header（全局切换）
+│   └── 010-machine-selector.tsx    # 010 应用后的完整前端快照（当前基底）
 ├── plugin/
 │   ├── manifest.json           # hermes 插件清单
 │   └── dashboard/
