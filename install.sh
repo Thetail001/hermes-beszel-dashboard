@@ -113,7 +113,7 @@ PY
 
 # ---------------------------------------------------------------- 5. 凭据文件
 info "写入 beszel 凭据文件（plugin_api.py 读取）..."
-CRED_FILE="${BESZEL_CRED_FILE:-$HOME/hermes-workspace/reports/dashboard-credentials.txt}"
+CRED_FILE="${BESZEL_CRED_FILE:-$PLUGIN_DIR/dashboard-credentials.txt}"
 mkdir -p "$(dirname "$CRED_FILE")"
 # 格式：<email> / <password>（plugin_api.py 的正则 <email> / (\S+) 匹配）
 printf '%s / %s\n' "$BESZEL_SUPERUSER_EMAIL" "$BESZEL_SUPERUSER_PASS" > "$CRED_FILE"
@@ -122,7 +122,7 @@ info "  凭据文件: $CRED_FILE"
 
 # ---------------------------------------------------------------- 6. GeoIP 库
 info "下载 GeoIP 库（dbip-city-lite，中心侧 GeoIP 富化用）..."
-GEOIP_DB="${GEOIP_DB:-$HOME/hermes-workspace/dbip-city-lite.mmdb}"
+GEOIP_DB="${GEOIP_DB:-$PLUGIN_DIR/dbip-city-lite.mmdb}"
 if [ -f "$GEOIP_DB" ]; then
   info "  GeoIP 库已存在，跳过"
 else

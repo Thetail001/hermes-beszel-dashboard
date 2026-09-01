@@ -24,8 +24,13 @@ router = APIRouter()
 
 # ---------------------------------------------------------------- config
 HUB = "http://127.0.0.1:8090"
+# Runtime data lives under the plugin's own directory (~/.hermes/plugins/beszel),
+# NOT the maintainer's workspace. Every path is env-overridable.
+PLUGIN_DATA_DIR = Path(os.environ.get(
+    "BESZEL_PLUGIN_DATA_DIR",
+    str(Path.home() / ".hermes/plugins/beszel")))
 CRED_FILE = Path(os.environ.get(
-    "BESZEL_CRED_FILE", "/root/hermes-workspace/reports/dashboard-credentials.txt"))
+    "BESZEL_CRED_FILE", str(PLUGIN_DATA_DIR / "dashboard-credentials.txt")))
 # PB superuser identity; override via env — never commit real credentials.
 SUPERUSER_EMAIL = os.environ.get("BESZEL_SUPERUSER_EMAIL", "admin@example.com")
 
@@ -202,7 +207,8 @@ async def auto_auth():
 
 
 # ---------------------------------------------------------------- security
-SEC_DB = Path("/root/hermes-workspace/reports/security-events.db")
+SEC_DB = Path(os.environ.get(
+    "BESZEL_SEC_DB", str(PLUGIN_DATA_DIR / "security-events.db")))
 
 # Authoritative schema — the centre owns this database (agents push over HTTP
 # and never touch it). CREATE IF NOT EXISTS so every connect is idempotent and
@@ -692,7 +698,8 @@ async def security_ip_profile(ip: str):
 # self-reported machine_id — geo-enriches, and UPSERTs by event_id (idempotent).
 
 SECURITY_TOKENS_FILE = None  # deprecated — ingest now uses beszel's universal token
-GEOIP_DB = Path("/root/hermes-workspace/dbip-city-lite.mmdb")
+GEOIP_DB = Path(os.environ.get(
+    "BESZEL_GEOIP_DB", str(PLUGIN_DATA_DIR / "dbip-city-lite.mmdb")))
 
 # event types an agent may legitimately report
 _VALID_EVENT_TYPES = {"ban", "unban", "attack", "scan", "auth_fail", "auth_success"}
@@ -1079,7 +1086,8 @@ async def security_ingest(request: Request):
     return {"ok": True, "machine_id": machine_id, "accepted": accepted, "rejected": rejected}
 
 
-MACHINE_LOCATIONS_FILE = Path("/root/.hermes/plugins/beszel/machine_locations.json")
+MACHINE_LOCATIONS_FILE = Path(os.environ.get(
+    "BESZEL_MACHINE_LOCATIONS_FILE", str(PLUGIN_DATA_DIR / "machine_locations.json")))
 
 
 def _load_machine_locations() -> dict:

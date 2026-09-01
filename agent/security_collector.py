@@ -28,18 +28,20 @@ from pathlib import Path
 from typing import Optional
 
 # ------------------------------------------------------------------ config
-# Local direct-write SQLite (centre-side only — agents run push mode and never
-# touch this). Do NOT derive any agent-side path from DB_PATH.
-DB_PATH = Path("/root/hermes-workspace/reports/security-events.db")
-# Push buffer: where failed pushes are buffered across restarts. Must be local
-# to THIS machine — agents don't have the centre's /root/hermes-workspace.
+# Runtime paths default to the script's own directory (agent-side) — never the
+# centre's workspace. Each is env-overridable.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+
+# Local direct-write SQLite (legacy local mode; push mode never touches this).
+DB_PATH = Path(os.environ.get("SEC_DB_PATH", str(_SCRIPT_DIR / "security-events.db")))
+# Push buffer: where failed pushes are buffered across restarts.
 BUFFER_FILE = Path(os.environ.get(
-    "SEC_BUFFER_FILE",
-    str(Path(__file__).resolve().parent / "security-push-buffer.jsonl")))
+    "SEC_BUFFER_FILE", str(_SCRIPT_DIR / "security-push-buffer.jsonl")))
 FAIL2BAN_LOG = Path("/var/log/fail2ban.log")
 NGINX_LOG = Path("/var/log/nginx/access.log")
 AUTH_LOG = Path("/var/log/auth.log")
-GEOIP_DB = Path("/root/hermes-workspace/dbip-city-lite.mmdb")
+# GeoIP DB (legacy local mode; centre does GeoIP in push mode).
+GEOIP_DB = Path(os.environ.get("SEC_GEOIP_DB", str(_SCRIPT_DIR / "dbip-city-lite.mmdb")))
 # Machine identity: prefer env, then hostname. The beszel hub registers agents
 # by hostname, so the hostname is usually the right machine id.
 MACHINE_ID = os.environ.get("SEC_MACHINE_ID") or socket.gethostname()
