@@ -1,10 +1,19 @@
 # example.com —— hermes dashboard 反代
-# Placeholders: replace the domain, TLS cert paths, and auth settings with your own.
+# 占位符：域名 / TLS 证书路径 / 认证设置按需替换。
 #
-# 反代两层：
-#   /            → hermes dashboard (127.0.0.1:9119)
-#   /api/plugins/beszel/pb/* → beszel hub (PocketBase, 127.0.0.1:8090)
-# beszel 的 SSE/WS 走 /api/plugins/beszel/pb/api/...，需要关闭 proxy buffering。
+# 认证架构（两层）：
+#   第 1 层 nginx：会话 cookie 存在性挡板（map cookie，无 cookie 302 /login）
+#   第 2 层 hermes：会话验签（密码 + cookie + CSRF）
+#
+# 关键放行（fail-closed，缺了远程 agent / collector 都连不上）：
+#   /api/beszel/agent-connect           → beszel hub (8090)，WebSocket，agent 用 X-Token 认证
+#   /api/plugins/beszel/security/ingest → hermes (9119)，collector 用 Bearer token 认证
+#   beszel 面板流量走 hermes 插件反代（/api/plugins/beszel/pb/*），不经 nginx 直连 hub。
+
+map $http_cookie $has_hermes_session {
+    default 0;
+    "~*hermes_session_at" 1;
+}
 
 server {
     listen 80;
@@ -19,41 +28,72 @@ server {
 server {
     listen 443 ssl;
     listen [::]:443 ssl;
-    http2 on;
     server_name example.com;
 
     ssl_certificate     /etc/nginx/ssl/example.com.crt;
     ssl_certificate_key /etc/nginx/ssl/example.com.key;
 
-    # NOTE: this deployment puts a second (nginx basic-auth) gate in front of
-    # the dashboard. The dashboard itself also has its own login. Adjust as you like.
-    # auth_basic "restricted";
-    # auth_basic_user_file /etc/nginx/.htpasswd;
+    # 健康探针：公开 liveness，无敏感信息
+    location = /api/health {
+        proxy_pass http://127.0.0.1:9119;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+    }
 
-    location / {
+    # beszel agent WebSocket：精确反代到 hub 8090。
+    # agent 用 X-Token + fingerprint + SSH key 在 hub 侧认证（无效 token → 401），
+    # 不经过 hermes 会话门。
+    location = /api/beszel/agent-connect {
+        proxy_pass http://127.0.0.1:8090;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # security ingest：放行 cookie 挡板，走 hermes bearer token 认证
+    # （插件已 register_token_route，fails closed —— 无/错 token → 401）
+    location = /api/plugins/beszel/security/ingest {
         proxy_pass http://127.0.0.1:9119;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # SSE / long-polling friendliness
         proxy_read_timeout 3600s;
-        proxy_send_timeout 3600s;
-        proxy_buffering off;
     }
 
-    # beszel hub (PocketBase) — only reachable through the plugin's /pb/ prefix
-    location /api/plugins/beszel/pb/ {
-        proxy_pass http://127.0.0.1:8090/;
+    # 登录页与认证端点：必须可达（否则鸡生蛋问题）
+    location ~ ^/(login|auth/)(.*)?$ {
+        proxy_pass http://127.0.0.1:9119;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        # SSE for live system metrics
-        proxy_buffering off;
         proxy_read_timeout 3600s;
-        proxy_set_header Connection "";
+    }
+
+    # 其余一切：cookie 挡板
+    location / {
+        if ($has_hermes_session = 0) {
+            return 302 /login;
+        }
+        proxy_pass http://127.0.0.1:9119;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 }
