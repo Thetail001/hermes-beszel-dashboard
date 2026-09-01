@@ -5,3 +5,9 @@ hub/beszel
 hub/beszel_data/
 *.db
 __pycache__/
+security_tokens.json
+machine_locations.json
+security-trusted-sources.json
+agent_token.txt
+*.jsonl
+*.bak.*

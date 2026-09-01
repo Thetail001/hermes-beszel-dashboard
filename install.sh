@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# hermes-beszel-dashboard 一键安装：同步插件到 ~/.hermes/plugins/ + 白名单 + 重启
+# hermes-beszel-dashboard one-shot install:
+#   sync the plugin into ~/.hermes/plugins/, whitelist it, restart the dashboard.
 set -euo pipefail
 PLUGIN_NAME=beszel
 DEST="$HOME/.hermes/plugins/$PLUGIN_NAME/dashboard"
@@ -9,21 +10,27 @@ cp -r plugin/dashboard/dist "$DEST/"
 cp plugin/dashboard/manifest.json "$DEST/"
 cp plugin/dashboard/plugin_api.py "$DEST/"
 
-# 白名单
+# Whitelist the plugin in hermes config.yaml
 python3 - << 'PY'
 import yaml, os
 p = os.path.expanduser("~/.hermes/config.yaml")
 c = yaml.safe_load(open(p))
 en = c.setdefault("plugins", {}).setdefault("enabled", [])
-if "beszel" not in en:
-    en.append("beszel")
+if PLUGIN_NAME not in en:
+    en.append(PLUGIN_NAME)
     yaml.dump(c, open(p, "w"), allow_unicode=True, sort_keys=False)
-    print("config: plugins.enabled + beszel")
+    print("config: plugins.enabled +" + PLUGIN_NAME)
 PY
 
-# 重启 dashboard
-pkill -f "hermes_cli.main dashboard" || true
-sleep 2
-setsid python -m hermes_cli.main dashboard --no-open >> /var/log/hermes-dashboard.log 2>&1 < /dev/null &
-sleep 5
-echo "✓ 安装完成，dashboard 已重启"
+# Restart the dashboard so it picks up the plugin.
+# Prefer the systemd user unit; fall back to killing the process and letting
+# whatever supervises it (systemd/Restart=on-failure) bring it back up.
+if systemctl --user list-unit-files 2>/dev/null | grep -q "^hermes-dashboard"; then
+  systemctl --user restart hermes-dashboard
+else
+  pkill -f "hermes_cli.main dashboard" || true
+  sleep 2
+  setsid python -m hermes_cli.main dashboard --no-open >> /var/log/hermes-dashboard.log 2>&1 < /dev/null &
+  sleep 5
+fi
+echo "✓ installed; dashboard restarted"

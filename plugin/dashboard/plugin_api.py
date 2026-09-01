@@ -8,6 +8,7 @@ import asyncio
 import hmac
 import ipaddress
 import json
+import os
 import re
 import sqlite3
 import threading
@@ -24,8 +25,10 @@ router = APIRouter()
 
 # ---------------------------------------------------------------- config
 HUB = "http://127.0.0.1:8090"
-CRED_FILE = Path("/root/hermes-workspace/reports/dashboard-credentials.txt")
-SUPERUSER_EMAIL = "admin@example.com"
+CRED_FILE = Path(os.environ.get(
+    "BESZEL_CRED_FILE", "/root/hermes-workspace/reports/dashboard-credentials.txt"))
+# PB superuser identity; override via env — never commit real credentials.
+SUPERUSER_EMAIL = os.environ.get("BESZEL_SUPERUSER_EMAIL", "admin@example.com")
 
 _token_cache = {"token": "", "exp": 0.0}
 
@@ -848,8 +851,9 @@ def _load_machine_locations() -> dict:
     """Manual coordinate overrides: {name-or-id: {lat, lon, city, country}}.
 
     Takes priority over GeoIP — needed when an agent's host is a loopback/NAT
-    address (no public IP to geo-locate) or when dbip mis-geolocates (this host
-    203.0.113.10 is wrongly placed in HK; it is actually DE).
+    address (no public IP to geo-locate) or when dbip mis-geolocates (the host
+    IP may be registered to a provider whose IP range is announced from a
+    different country than where the server actually sits).
     """
     try:
         data = json.loads(MACHINE_LOCATIONS_FILE.read_text())

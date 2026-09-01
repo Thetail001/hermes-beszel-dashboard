@@ -3,7 +3,9 @@ Description=Beszel agent (my-server)
 After=network.target beszel-hub.service
 
 [Service]
-ExecStart=/usr/local/bin/beszel-agent -u http://127.0.0.1:8090 -t GENERATE_A_TOKEN_IN_THE_HUB_UI -k "ssh-ed25519 ssh-ed25519 AAAA...paste-agent-host-public-key..."
+# Generate a fresh token: beszel hub admin UI → add system → copy the token.
+# Use an actual SSH public key from the agent host (`ssh-keygen -t ed25519`).
+ExecStart=/usr/local/bin/beszel-agent -u http://127.0.0.1:8090 -t GENERATE_A_TOKEN_IN_THE_HUB_UI -k "ssh-ed25519 AAAA...paste-agent-host-public-key..."
 Restart=on-failure
 RestartSec=5
 

@@ -570,24 +570,14 @@ export default function SecurityPage() {
 			fetch(`/api/plugins/beszel/security/attackers?${qs}`).then((r) => r.json()),
 			fetch("/api/plugins/beszel/security/bans/current").then((r) => r.json()),
 			fetch(`/api/plugins/beszel/security/stats/summary?period=${filter.period}`).then((r) => r.json()),
-			fetch("/api/plugins/beszel/pb/api/collections/systems/records").then((r) => r.json()),
+			fetch("/api/plugins/beszel/security/machines").then((r) => r.json()),
 		])
-			.then(([ev, at, bn, sm, sys]) => {
+			.then(([ev, at, bn, sm, mc]) => {
 				setEvents(ev.items || [])
 				setAttackers(at.items || [])
 				setBans(bn.items || [])
 				setSummary(sm)
-				const machineList = (sys.items || []).map((s: any) => ({
-					id: s.id,
-					name: s.name,
-					host: s.host,
-					status: s.status,
-					country: "DE",
-					city: "a German city",
-					lat: 50.1109,
-					lon: 8.6821,
-				}))
-				setMachines(machineList)
+				setMachines(mc.items || [])
 			})
 			.finally(() => setLoading(false))
 	}

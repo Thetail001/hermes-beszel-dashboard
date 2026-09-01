@@ -5,7 +5,17 @@ Wants=fail2ban.service
 
 [Service]
 Type=simple
-ExecStart=/usr/bin/python3 /root/hermes-workspace/hermes-beszel-dashboard/agent/security_collector.py
+# Example unit — adjust paths. Push mode (recommended): agent posts events to
+# the centre's /security/ingest; the centre owns the SQLite DB and GeoIP.
+# Local mode (default): drop --push/--center-url/--token-file and the collector
+# writes a local SQLite DB directly.
+ExecStart=/usr/bin/python3 /opt/beszel-sec-agent/security_collector.py \
+  --push \
+  --center-url https://your-centre-host/api/plugins/beszel/security/ingest \
+  --token-file /opt/beszel-sec-agent/agent_token.txt \
+  --flush-interval 30
+# Environment=SEC_MACHINE_ID=my-server
+# Environment=SEC_TRUSTED_SOURCES_FILE=/opt/beszel-sec-agent/trusted-sources.json
 Restart=always
 RestartSec=5
 StandardOutput=journal

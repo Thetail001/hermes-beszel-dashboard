@@ -16,6 +16,7 @@ import ipaddress
 import json
 import os
 import re
+import socket
 import sqlite3
 import sys
 import threading
@@ -32,24 +33,38 @@ FAIL2BAN_LOG = Path("/var/log/fail2ban.log")
 NGINX_LOG = Path("/var/log/nginx/access.log")
 AUTH_LOG = Path("/var/log/auth.log")
 GEOIP_DB = Path("/root/hermes-workspace/dbip-city-lite.mmdb")
-MACHINE_ID = "my-server-1"  # TODO: read from beszel systems table
+# Machine identity: prefer env, then hostname. The beszel hub registers agents
+# by hostname, so the hostname is usually the right machine id.
+MACHINE_ID = os.environ.get("SEC_MACHINE_ID") or socket.gethostname()
 
 # ------------------------------------------------------------------ ip filter
 # Skip private/loopback/reserved ranges — they are never real attackers.
 # Standard library ipaddress.is_global handles: 127/8, 10/8, 172.16/12,
 # 192.168/16, 169.254/16, ::1, fc00::/7, etc.
 # NOTE: 100.64.0.0/10 (CGNAT/Tailscale) is *not* marked private by the stdlib,
-# and the operator's own VPN exit node (Amazon IAD 100.48.0.0/12) is publicly
-# routable — so trusted sources must be excluded via the explicit list below.
+# and an operator's own VPN exit node may be publicly routable — so trusted
+# sources must be excluded via an explicit list.
 
 # Trusted source IPs/CIDRs that belong to the operator (VPN exits, home, office).
-# Events from these are never attacks. Extend as needed.
-TRUSTED_SOURCES: tuple[str, ...] = (
-    "203.0.113.20",        # operator VPN exit (Amazon IAD)
-    # "203.0.113.0/24",      # example: home ISP static range
-)
+# Events from these are never attacks. Loaded from an external JSON file
+# ({"trusted_sources": ["203.0.113.5", "203.0.113.0/24", ...]}); keep that file
+# out of version control — it leaks where you connect from.
+_TRUSTED_FILE = Path(os.environ.get(
+    "SEC_TRUSTED_SOURCES_FILE",
+    str(Path(__file__).resolve().parent.parent.parent / "security-trusted-sources.json")))
+
+
+def _load_trusted_sources() -> tuple[str, ...]:
+    try:
+        data = json.loads(_TRUSTED_FILE.read_text())
+        entries = data.get("trusted_sources", []) if isinstance(data, dict) else []
+        return tuple(e for e in entries if isinstance(e, str))
+    except (OSError, json.JSONDecodeError):
+        return ()
+
+
 _TRUSTED_NETWORKS = []
-for _entry in TRUSTED_SOURCES:
+for _entry in _load_trusted_sources():
     try:
         _TRUSTED_NETWORKS.append(ipaddress.ip_network(_entry, strict=False))
     except ValueError:
