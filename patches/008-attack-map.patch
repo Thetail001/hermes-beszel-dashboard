@@ -16,7 +16,7 @@
 18a25,26
 > 	lat: number | null
 > 	lon: number | null
-41a50,81
+41a50,82
 > interface Machine {
 > 	id: string
 > 	name: string
@@ -47,15 +47,16 @@
 > 	country: string
 > 	ip: string
 > 	sort: string
+> 	machine_id: string
 > }
 > 
-47a88,89
+47a89,90
 > 	auth_fail: "bg-orange-500/10 text-orange-500 border-orange-500/20",
 > 	auth_success: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
-54a97,98
+54a98,99
 > 	auth_fail: "#f97316",
 > 	auth_success: "#10b981",
-66a111,135
+66a112,137
 > function buildQueryString(f: FilterState): string {
 > 	const p = new URLSearchParams()
 > 	if (f.period && f.period !== "custom") p.set("period", f.period)
@@ -65,6 +66,7 @@
 > 	if (f.country) p.set("country", f.country)
 > 	if (f.ip) p.set("ip", f.ip)
 > 	if (f.sort) p.set("sort", f.sort)
+> 	if (f.machine_id) p.set("machine_id", f.machine_id)
 > 	return p.toString()
 > }
 > 
@@ -81,11 +83,11 @@
 > 	return out
 > }
 > 
-113c182
+113c184
 < 						<span className="capitalize">{type}</span>
 ---
 > 						<span className="capitalize">{type.replace("_", " ")}</span>
-157a227,510
+157a229,512
 > /** Attack Map: Canvas-based world map with attack trajectories */
 > function AttackMap({ events, machines, effectLevel, fusionMode }: {
 > 	events: SecurityEvent[]
@@ -370,13 +372,13 @@
 > 	)
 > }
 > 
-159a513
+159a515
 > 	// Data
-160a515
+160a517
 > 	const [attackers, setAttackers] = useState<Attacker[]>([])
-162a518
+162a520
 > 	const [machines, setMachines] = useState<Machine[]>([])
-164a521,557
+164a523,560
 > 	// View state
 > 	const [effectLevel, setEffectLevel] = useState(2)
 > 	const [fusionMode, setFusionMode] = useState(false)
@@ -391,6 +393,7 @@
 > 		country: "",
 > 		ip: "",
 > 		sort: "recent",
+> 		machine_id: "",
 > 	})
 > 
 > 	// Query input
@@ -414,7 +417,7 @@
 > 	}, [])
 > 
 > 	// Persist view state
-165a559,567
+165a562,570
 > 		localStorage.setItem(
 > 			"beszel-security-view",
 > 			JSON.stringify({ effectLevel, fusionMode, refreshInterval, filter })
@@ -424,25 +427,25 @@
 > 	const fetchData = () => {
 > 		setLoading(true)
 > 		const qs = buildQueryString(filter)
-167c569,570
+167,169c572,576
 < 			fetch("/api/plugins/beszel/security/events?limit=50").then((r) => r.json()),
+< 			fetch("/api/plugins/beszel/security/bans/current").then((r) => r.json()),
+< 			fetch("/api/plugins/beszel/security/stats/summary?period=24h").then((r) => r.json()),
 ---
 > 			fetch(`/api/plugins/beszel/security/events?limit=50&${qs}`).then((r) => r.json()),
 > 			fetch(`/api/plugins/beszel/security/attackers?${qs}`).then((r) => r.json()),
-169c572,573
-< 			fetch("/api/plugins/beszel/security/stats/summary?period=24h").then((r) => r.json()),
----
-> 			fetch(`/api/plugins/beszel/security/stats/summary?period=${filter.period}`).then((r) => r.json()),
+> 			fetch(`/api/plugins/beszel/security/bans/current?${qs}`).then((r) => r.json()),
+> 			fetch(`/api/plugins/beszel/security/stats/summary?${qs}`).then((r) => r.json()),
 > 			fetch("/api/plugins/beszel/security/machines").then((r) => r.json()),
-171c575
+171c578
 < 			.then(([ev, bn, sm]) => {
 ---
 > 			.then(([ev, at, bn, sm, mc]) => {
-172a577
+172a580
 > 				setAttackers(at.items || [])
-174a580
+174a583
 > 				setMachines(mc.items || [])
-177c583,625
+177c586,628
 < 	}, [])
 ---
 > 	}
@@ -488,9 +491,9 @@
 > 			/>
 > 		)
 > 	}
-180a629
+180a632
 > 			{/* Header */}
-184a634,678
+184a637,681
 > 				<div className="flex items-center gap-4">
 > 					<div className="flex items-center gap-2">
 > 						<Label className="text-xs"><Trans>Refresh</Trans></Label>
@@ -536,57 +539,57 @@
 > 						</div>
 > 					</div>
 > 				</div>
-187c681
+187c684
 < 			{/* stats cards */}
 ---
 > 			{/* Stats cards */}
-191,193c685
+191,193c688
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>Active Bans</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Active Bans</Trans></CardTitle>
-197,199c689
+197,199c692
 < 						<p className="text-xs text-muted-foreground">
 < 							<Trans>Currently banned IPs</Trans>
 < 						</p>
 ---
 > 						<p className="text-xs text-muted-foreground"><Trans>Currently banned IPs</Trans></p>
-204,206c694
+204,206c697
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>24h Events</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Events</Trans></CardTitle>
-215,217c703
+215,217c706
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>Unique IPs</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Unique IPs</Trans></CardTitle>
-221,223c707
+221,223c710
 < 						<p className="text-xs text-muted-foreground">
 < 							<Trans>Distinct source IPs in 24h</Trans>
 < 						</p>
 ---
 > 						<p className="text-xs text-muted-foreground"><Trans>Distinct source IPs</Trans></p>
-228,230c712
+228,230c715
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>Event Types</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Event Types</Trans></CardTitle>
-238c720
+238c723
 < 			{/* current bans */}
 ---
 > 			{/* Attack map */}
-241,243c723
+241,243c726
 < 					<CardTitle>
 < 						<Trans>Active Bans</Trans>
 < 					</CardTitle>
 ---
 > 					<CardTitle><Trans>Attack Map</Trans></CardTitle>
-246,249c726,737
+246,249c729,740
 < 					{bans.length === 0 ? (
 < 						<div className="py-8 text-center text-muted-foreground">
 < 							<Trans>No active bans.</Trans>
@@ -604,7 +607,7 @@
 > 				<CardContent>
 > 					{filteredBans.length === 0 ? (
 > 						<div className="py-8 text-center text-muted-foreground"><Trans>No active bans.</Trans></div>
-251,276c739,747
+251,276c742,750
 < 						<Table>
 < 							<TableHeader>
 < 								<TableRow>
@@ -641,11 +644,11 @@
 > 								</div>
 > 							))}
 > 						</div>
-281c752
+281c755
 < 			{/* event stream */}
 ---
 > 			{/* Attackers (Level 1) with integrated filter bar */}
-283,286c754,828
+283,286c757,845
 < 				<CardHeader>
 < 					<CardTitle>
 < 						<Trans>Event Stream</Trans>
@@ -703,6 +706,20 @@
 > 							<option value="count">Most active</option>
 > 							<option value="first_seen">Newest first</option>
 > 						</select>
+> 						{machines.length > 1 && (
+> 							<select
+> 								value={filter.machine_id}
+> 								onChange={(e) => setFilter((f) => ({ ...f, machine_id: e.target.value }))}
+> 								className="h-8 rounded-md border bg-background px-2 text-xs"
+> 							>
+> 								<option value="">All machines</option>
+> 								{machines.map((m) => (
+> 									<option key={m.id} value={m.name || m.id}>
+> 										{m.name || m.id}
+> 									</option>
+> 								))}
+> 							</select>
+> 						)}
 > 						{(filter.type || filter.country || filter.ip) && (
 > 							<div className="flex items-center gap-1">
 > 								{filter.type && (
@@ -726,7 +743,7 @@
 > 							</div>
 > 						)}
 > 					</div>
-290,291c832,857
+290,291c849,874
 < 						<div className="py-8 text-center text-muted-foreground">
 < 							<Trans>Loading...</Trans>
 ---
@@ -756,7 +773,7 @@
 > 									</div>
 > 								</div>
 > 							))}
-292a859,965
+292a876,982
 > 					)}
 > 				</CardContent>
 > 			</Card>
@@ -864,13 +881,13 @@
 > 				<CardContent>
 > 					{loading && events.length === 0 ? (
 > 						<div className="py-8 text-center text-muted-foreground"><Trans>Loading...</Trans></div>
-294,296c967
+294,296c984
 < 						<div className="py-8 text-center text-muted-foreground">
 < 							<Trans>No security events recorded.</Trans>
 < 						</div>
 ---
 > 						<div className="py-8 text-center text-muted-foreground"><Trans>No events for this IP.</Trans></div>
-299,309c970,1001
+299,315c987,1018
 < 							{events.map((ev) => (
 < 								<div
 < 									key={ev.id}
@@ -882,6 +899,12 @@
 < 									<span className="font-mono">{ev.src_ip}</span>
 < 									{ev.country && (
 < 										<span className="text-xs text-muted-foreground">{ev.country}</span>
+< 									)}
+< 									{ev.jail && (
+< 										<span className="text-muted-foreground">[{ev.jail}]</span>
+< 									)}
+< 									{ev.uri && (
+< 										<span className="max-w-[200px] truncate text-muted-foreground">{ev.uri}</span>
 ---
 > 							{grouped.map((ev, gi) => (
 > 								<div key={gi} className="rounded-md border">
@@ -915,20 +938,14 @@
 > 												) : null
 > 											})}
 > 										</div>
-311,322d1002
-< 									{ev.jail && (
-< 										<span className="text-muted-foreground">[{ev.jail}]</span>
-< 									)}
-< 									{ev.uri && (
-< 										<span className="max-w-[200px] truncate text-muted-foreground">{ev.uri}</span>
-< 									)}
+317,322d1019
 < 									{ev.count > 1 && (
 < 										<span className="text-muted-foreground">×{ev.count}</span>
 < 									)}
 < 									<span className="ml-auto text-xs text-muted-foreground">
 < 										{timeAgo(ev.ts)}
 < 									</span>
-324a1005,1014
+324a1022,1031
 > 							{hasMore && (
 > 								<Button
 > 									variant="outline"

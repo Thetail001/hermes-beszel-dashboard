@@ -279,15 +279,17 @@ async def security_events(
     jail: str = "",
     ip: str = "",
     type: str = "",
+    machine_id: str = "",
 ):
     """Cursor-paginated security events.
 
     Query params:
-      limit:  page size (max 200)
-      before: ISO timestamp cursor (events older than this)
-      jail:   filter by fail2ban jail
-      ip:     filter by source IP
-      type:   filter by event_type (ban|unban|attack|scan)
+      limit:      page size (max 200)
+      before:     ISO timestamp cursor (events older than this)
+      jail:       filter by fail2ban jail
+      ip:         filter by source IP
+      type:       filter by event_type (ban|unban|attack|scan)
+      machine_id: filter by machine (empty = all machines)
     """
     limit = min(limit, 200)
     sql = "SELECT * FROM security_events WHERE 1=1"
@@ -304,6 +306,9 @@ async def security_events(
     if type:
         sql += " AND event_type = ?"
         params.append(type)
+    if machine_id:
+        sql += " AND machine_id = ?"
+        params.append(machine_id)
     sql += " ORDER BY ts DESC LIMIT ?"
     params.append(limit)
 
@@ -319,56 +324,67 @@ async def security_events(
 
 
 @router.get("/security/bans/current")
-async def security_bans_current():
-    """Currently active bans (unbanned_at IS NULL)."""
+async def security_bans_current(machine_id: str = ""):
+    """Currently active bans (unbanned_at IS NULL). Optionally per-machine."""
     conn = _sec_db()
     try:
-        rows = conn.execute(
-            "SELECT * FROM security_bans WHERE unbanned_at IS NULL "
-            "ORDER BY banned_at DESC"
-        ).fetchall()
+        if machine_id:
+            rows = conn.execute(
+                "SELECT * FROM security_bans WHERE unbanned_at IS NULL "
+                "AND machine_id = ? ORDER BY banned_at DESC",
+                (machine_id,),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                "SELECT * FROM security_bans WHERE unbanned_at IS NULL "
+                "ORDER BY banned_at DESC"
+            ).fetchall()
         return {"items": [dict(r) for r in rows]}
     finally:
         conn.close()
 
 
 @router.get("/security/stats/summary")
-async def security_stats_summary(period: str = "24h"):
+async def security_stats_summary(period: str = "24h", machine_id: str = ""):
     """Aggregate stats for dashboard cards.
 
     period: 24h | 7d | 30d
+    machine_id: optional per-machine filter (empty = all machines)
     """
     hours = {"24h": 24, "7d": 168, "30d": 720}.get(period, 24)
+    mcond = " AND machine_id = ?" if machine_id else ""
+    mparam = [machine_id] if machine_id else []
     conn = _sec_db()
     try:
         total = conn.execute(
             "SELECT COUNT(*) FROM security_events "
-            "WHERE ts > datetime('now', ?)",
-            (f"-{hours} hours",),
+            "WHERE ts > datetime('now', ?)" + mcond,
+            (f"-{hours} hours", *mparam),
         ).fetchone()[0]
         bans = conn.execute(
-            "SELECT COUNT(*) FROM security_bans WHERE unbanned_at IS NULL"
+            "SELECT COUNT(*) FROM security_bans WHERE unbanned_at IS NULL" + mcond,
+            mparam,
         ).fetchone()[0]
         ips = conn.execute(
             "SELECT COUNT(DISTINCT src_ip) FROM security_events "
-            "WHERE ts > datetime('now', ?)",
-            (f"-{hours} hours",),
+            "WHERE ts > datetime('now', ?)" + mcond,
+            (f"-{hours} hours", *mparam),
         ).fetchone()[0]
         by_type = {
             r[0]: r[1]
             for r in conn.execute(
                 "SELECT event_type, COUNT(*) FROM security_events "
-                "WHERE ts > datetime('now', ?) GROUP BY event_type",
-                (f"-{hours} hours",),
+                "WHERE ts > datetime('now', ?) " + mcond + " GROUP BY event_type",
+                (f"-{hours} hours", *mparam),
             )
         }
         by_jail = {
             r[0]: r[1]
             for r in conn.execute(
                 "SELECT jail, COUNT(*) FROM security_events "
-                "WHERE ts > datetime('now', ?) AND jail IS NOT NULL "
+                "WHERE ts > datetime('now', ?) AND jail IS NOT NULL " + mcond + " "
                 "GROUP BY jail",
-                (f"-{hours} hours",),
+                (f"-{hours} hours", *mparam),
             )
         }
         return {
@@ -393,18 +409,20 @@ async def security_attackers(
     ip: str = "",
     sort: str = "recent",
     limit: int = 100,
+    machine_id: str = "",
 ):
     """Aggregated attacker cards for Level 1 view.
 
     Query params:
-      period:  24h | 7d | 30d | custom (use start/end instead)
-      start:   ISO datetime (overrides period)
-      end:     ISO datetime (overrides period)
-      type:    filter by event_type
-      country: filter by country code
-      ip:      filter by source IP
-      sort:    recent | count | first_seen
-      limit:   max results
+      period:    24h | 7d | 30d | custom (use start/end instead)
+      start:     ISO datetime (overrides period)
+      end:       ISO datetime (overrides period)
+      type:      filter by event_type
+      country:   filter by country code
+      ip:        filter by source IP
+      sort:      recent | count | first_seen
+      limit:     max results
+      machine_id: filter by machine (empty = all machines)
     """
     limit = min(limit, 500)
     conn = _sec_db()
@@ -429,6 +447,9 @@ async def security_attackers(
         if ip:
             filters += " AND src_ip = ?"
             params.append(ip)
+        if machine_id:
+            filters += " AND machine_id = ?"
+            params.append(machine_id)
 
         # Sort mapping
         sort_map = {

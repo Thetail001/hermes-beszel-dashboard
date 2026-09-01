@@ -77,6 +77,7 @@ interface FilterState {
 	country: string
 	ip: string
 	sort: string
+	machine_id: string
 }
 
 // ---------------------------------------------------------------- helpers
@@ -117,6 +118,7 @@ function buildQueryString(f: FilterState): string {
 	if (f.country) p.set("country", f.country)
 	if (f.ip) p.set("ip", f.ip)
 	if (f.sort) p.set("sort", f.sort)
+	if (f.machine_id) p.set("machine_id", f.machine_id)
 	return p.toString()
 }
 
@@ -532,6 +534,7 @@ export default function SecurityPage() {
 		country: "",
 		ip: "",
 		sort: "recent",
+		machine_id: "",
 	})
 
 	// Query input
@@ -568,8 +571,8 @@ export default function SecurityPage() {
 		Promise.all([
 			fetch(`/api/plugins/beszel/security/events?limit=50&${qs}`).then((r) => r.json()),
 			fetch(`/api/plugins/beszel/security/attackers?${qs}`).then((r) => r.json()),
-			fetch("/api/plugins/beszel/security/bans/current").then((r) => r.json()),
-			fetch(`/api/plugins/beszel/security/stats/summary?period=${filter.period}`).then((r) => r.json()),
+			fetch(`/api/plugins/beszel/security/bans/current?${qs}`).then((r) => r.json()),
+			fetch(`/api/plugins/beszel/security/stats/summary?${qs}`).then((r) => r.json()),
 			fetch("/api/plugins/beszel/security/machines").then((r) => r.json()),
 		])
 			.then(([ev, at, bn, sm, mc]) => {
@@ -803,6 +806,20 @@ export default function SecurityPage() {
 							<option value="count">Most active</option>
 							<option value="first_seen">Newest first</option>
 						</select>
+						{machines.length > 1 && (
+							<select
+								value={filter.machine_id}
+								onChange={(e) => setFilter((f) => ({ ...f, machine_id: e.target.value }))}
+								className="h-8 rounded-md border bg-background px-2 text-xs"
+							>
+								<option value="">All machines</option>
+								{machines.map((m) => (
+									<option key={m.id} value={m.name || m.id}>
+										{m.name || m.id}
+									</option>
+								))}
+							</select>
+						)}
 						{(filter.type || filter.country || filter.ip) && (
 							<div className="flex items-center gap-1">
 								{filter.type && (
