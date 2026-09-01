@@ -1,6 +1,8 @@
 # hermes-beszel-dashboard
 
 > **A [Hermes Agent](https://github.com/NousResearch/hermes-agent) dashboard plugin** that drops the whole [beszel](https://github.com/henrygd/beszel) panel (lightweight server monitoring) into Hermes' dashboard, and layers a multi-machine **Security Operations Room** on top: collection, aggregation, geolocation and an attack map for SSH brute-force / fail2ban / nginx scan events. 中文文档：[README.md](README.md)
+> <img width="1850" height="977" alt="屏幕截图 2026-09-01 214340" src="https://github.com/user-attachments/assets/32f7a11f-f052-4448-a739-c9c8bd68fa5a" />
+
 
 **This is not a standalone app** — it exists as a plugin and runs alongside hermes:
 
