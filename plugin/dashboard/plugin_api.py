@@ -33,10 +33,56 @@ SUPERUSER_EMAIL = os.environ.get("BESZEL_SUPERUSER_EMAIL", "admin@example.com")
 _token_cache = {"token": "", "exp": 0.0}
 
 
+def _warn_bad_config() -> None:
+    """Emit a clear startup warning when the superuser identity looks
+    misconfigured (the #1 cause of a blank beszel tab). Non-fatal: read-only
+    endpoints still work without hub auth."""
+    import logging
+
+    log = logging.getLogger(__name__)
+    if SUPERUSER_EMAIL == "admin@example.com":
+        log.warning(
+            "BESZEL_SUPERUSER_EMAIL is not set (default 'admin@example.com'); "
+            "beszel auth will likely fail. Set it to the hub superuser identity."
+        )
+        return
+    try:
+        text = CRED_FILE.read_text()
+    except OSError:
+        log.warning(
+            "beszel credentials file missing/unreadable: %s — set BESZEL_CRED_FILE.",
+            CRED_FILE,
+        )
+        return
+    if re.search(re.escape(SUPERUSER_EMAIL) + r" / \S+", text) is None:
+        log.warning(
+            "no password line for '%s' in %s — check BESZEL_SUPERUSER_EMAIL "
+            "matches the hub's superuser identity.",
+            SUPERUSER_EMAIL,
+            CRED_FILE,
+        )
+
+
+_warn_bad_config()
+
+
 def _read_password() -> str:
-    m = re.search(re.escape(SUPERUSER_EMAIL) + r" / (\S+)", CRED_FILE.read_text())
+    try:
+        text = CRED_FILE.read_text()
+    except OSError as e:
+        raise HTTPException(
+            500,
+            f"beszel credentials file unreadable: {CRED_FILE} ({e}). "
+            f"Set BESZEL_CRED_FILE to the correct path.",
+        )
+    m = re.search(re.escape(SUPERUSER_EMAIL) + r" / (\S+)", text)
     if not m:
-        raise HTTPException(500, "beszel superuser password not found")
+        raise HTTPException(
+            500,
+            f"beszel superuser password not found for '{SUPERUSER_EMAIL}' in "
+            f"{CRED_FILE}. Set BESZEL_SUPERUSER_EMAIL to the hub's superuser "
+            f"identity (the email shown in beszel hub admin).",
+        )
     return m.group(1)
 
 

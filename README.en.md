@@ -119,6 +119,12 @@ curl -s -X POST http://127.0.0.1:9119/api/plugins/beszel/security/ingest \
 # Expect: {"ok":true,"accepted":1,...}; open the beszel tab in the dashboard to see the room
 ```
 
+A fuller post-deploy smoke test (login → machines → ingest → missing-token rejection, one command):
+
+```bash
+tests/smoke.sh http://127.0.0.1:9119 <dashboard-user> <dashboard-password> <a-machine-token>
+```
+
 ### Agent side (every monitored VPS)
 
 #### 1. Prerequisites

@@ -119,6 +119,12 @@ curl -s -X POST http://127.0.0.1:9119/api/plugins/beszel/security/ingest \
 # 期望：{"ok":true,"accepted":1,...}；浏览器打开 dashboard 的 beszel tab 能看到监控室数据
 ```
 
+更完整的部署后冒烟测试（登录 → machines → ingest → 无 token 拒收，一条命令）：
+
+```bash
+tests/smoke.sh http://127.0.0.1:9119 <dashboard用户名> <dashboard密码> <某台机器的token>
+```
+
 ### agent 侧（每台被监控 VPS）
 
 #### 1. 前置
