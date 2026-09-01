@@ -25,7 +25,7 @@
 - 多机架构：agent 无状态只推送（60s 窗口合并抗刷），中心统一入库；`event_id` 幂等 UPSERT，断网用 jsonl 磁盘缓冲补推
 - 中心侧 GeoIP 富化（dbip-city-lite，月度自动更新+热重载），攻击地图按真实坐标渲染
 - 攻击者卡片（按 IP 聚合）、IP 时间线、实时事件流、全局筛选（`ip:` `type:` `country:` 语法）、CSV/JSON 导出、90 天自动轮换
-- 安全：bearer token（hmac 常量时间比对，machine_id 从 token 推导）、严格输入校验（白名单/IP/时间窗/count 上限/批量上限）、全参数化 SQL
+- 安全：bearer token 复用 beszel 的 universal token（webui `/settings/tokens` 管理）、machine_id 与 beszel systems 表校验、严格输入校验（白名单/IP/时间窗/count 上限/批量上限）、全参数化 SQL
 
 ## 项目结构
 
@@ -86,8 +86,9 @@ cd hermes-beszel-dashboard
 
 | 文件 | 格式 | 作用 |
 |---|---|---|
-| `security_tokens.json` | `{"tokens": {"<machine_id>": "<随机token>"}}` | 每台 agent 的 ingest 凭据。token 用 `openssl rand -hex 32` 生成；**machine_id 必须 = agent 侧 `SEC_MACHINE_ID`（默认 hostname）** |
 | `machine_locations.json` | `{"<machine_id或name>": {"lat": .., "lon": .., "city": .., "country": ..}}` | 机器坐标手动覆盖（GeoIP 把 IP 段判错时兜底），可选 |
+
+> **认证不再用独立的 security_tokens.json**。agent 的 ingest 凭据 = beszel 的 **universal token**（在 beszel webui 的 `/settings/tokens` 里管理），机器身份 = beszel 里注册的系统名（`systems` 表）。连新机器时，在 beszel webui 里加系统即可，无需为安全事件单独生成 token。
 
 环境变量（写入 systemd user unit 或 `.env`）：
 
@@ -111,10 +112,10 @@ gunzip /root/hermes-workspace/dbip-city-lite.mmdb.gz
 #### 5. 验证
 
 ```bash
-# agent 侧推一条测试事件（把 <token> 换成 security_tokens.json 里的值）
+# agent 侧推一条测试事件（把 <token> 换成 beszel universal token，<机器名> 换成 beszel 系统名）
 curl -s -X POST http://127.0.0.1:9119/api/plugins/beszel/security/ingest \
   -H "Content-Type: application/json" -H "Authorization: Bearer <token>" \
-  -d '{"events":[{"event_id":"smoke:1","event_type":"auth_fail","src_ip":"8.8.8.8",
+  -d '{"machine_id":"<机器名>","events":[{"event_id":"smoke:1","event_type":"auth_fail","src_ip":"8.8.8.8",
        "ts":"'"$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"'","count":1,"raw_excerpt":"smoke test"}]}'
 # 期望：{"ok":true,"accepted":1,...}；浏览器打开 dashboard 的 beszel tab 能看到监控室数据
 ```
@@ -142,7 +143,7 @@ tests/smoke.sh http://127.0.0.1:9119 <dashboard用户名> <dashboard密码> <某
 ```bash
 mkdir -p /opt/beszel-sec-agent
 cp agent/security_collector.py /opt/beszel-sec-agent/
-echo "<中心security_tokens.json里这台机器的token>" > /opt/beszel-sec-agent/agent_token.txt
+echo "<beszel universal token（hub 的 /settings/tokens 里那个）>" > /opt/beszel-sec-agent/agent_token.txt
 chmod 600 /opt/beszel-sec-agent/agent_token.txt
 
 # 可选：运维自身 IP/网段（这些来源的事件不记为攻击）
@@ -163,9 +164,9 @@ systemctl daemon-reload && systemctl enable --now security-collector
 |---|---|---|
 | `--push` | 关 | 不加则本地直写 SQLite（单机模式） |
 | `--center-url` | 无 | 中心的 ingest URL |
-| `--token-file` | 无 | bearer token 文件（0600），比 `--token` 稳 |
+| `--token-file` | 无 | beszel universal token 文件（0600），比 `--token` 稳 |
 | `--flush-interval` | 30 | 推送周期（秒） |
-| `SEC_MACHINE_ID` | hostname | 机器标识，必须与中心 tokens 文件里的 key 一致 |
+| `SEC_MACHINE_ID` | hostname | 机器标识，必须 = beszel 里注册的系统名（默认 hostname 正好一致） |
 | `SEC_TRUSTED_SOURCES_FILE` | `<repo>../security-trusted-sources.json` | 可信来源列表路径 |
 
 #### 3. 验证

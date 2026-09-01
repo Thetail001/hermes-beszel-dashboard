@@ -5,7 +5,6 @@
 同时暴露 /api/plugins/beszel/security/* 查询安全事件。
 """
 import asyncio
-import hmac
 import ipaddress
 import json
 import os
@@ -692,7 +691,7 @@ async def security_ip_profile(ip: str):
 # derives machine_id from the verified principal — NEVER trusting the client's
 # self-reported machine_id — geo-enriches, and UPSERTs by event_id (idempotent).
 
-SECURITY_TOKENS_FILE = Path("/root/.hermes/plugins/beszel/security_tokens.json")
+SECURITY_TOKENS_FILE = None  # deprecated — ingest now uses beszel's universal token
 GEOIP_DB = Path("/root/hermes-workspace/dbip-city-lite.mmdb")
 
 # event types an agent may legitimately report
@@ -705,29 +704,74 @@ _LEN = {"jail": 100, "uri": 2048, "ua": 512, "username": 100, "raw_excerpt": 512
 
 
 # ---------------------------------------------------------------- token auth
-def _load_security_tokens() -> dict:
-    """Read {machine_id: token} from the 0600 token file. Cached on mtime."""
-    cache = _load_security_tokens._cache
+# The ingest token is beszel's universal token (managed in the beszel web UI at
+# /settings/tokens), NOT a separate per-machine secret. On each ingest we:
+#   1. verify the bearer token is an active beszel universal token (via PB API)
+#   2. verify the agent's self-reported machine_id exists in beszel's systems table
+# This reuses beszel's own identity/credential model end-to-end: one token in the
+# web UI, machines identified by their beszel system name.
+
+# Cached snapshot of beszel's universal tokens + system names, refreshed on a TTL.
+# verify_token() is synchronous (framework requirement) and runs on every ingest,
+# so we never hit the PB API synchronously — the cache is warmed lazily and
+# re-read on a short TTL.
+_beszel_auth_cache = {
+    "tokens": set(),
+    "systems": set(),      # system NAMES (what the agent reports as machine_id)
+    "ts": 0.0,
+    "lock": threading.Lock(),
+}
+_AUTH_TTL = 60.0  # seconds
+
+
+def _refresh_beszel_auth():
+    """Refresh the cached universal-token set + system-name set from beszel PB.
+
+    On any failure the previous cache is kept (fail-closed: an empty cache
+    rejects everything, but we only ever shrink it on a successful read)."""
+    now = time.time()
+    cache = _beszel_auth_cache
+    if now - cache["ts"] < _AUTH_TTL:
+        return
     try:
-        mtime = SECURITY_TOKENS_FILE.stat().st_mtime
-    except OSError:
-        return {}
-    if cache.get("mtime") == mtime:
-        return cache.get("tokens", {})
+        tok = _get_token()
+    except HTTPException:
+        return
     try:
-        data = json.loads(SECURITY_TOKENS_FILE.read_text())
-        tokens = {str(k): str(v) for k, v in data.get("tokens", {}).items()}
+        req = urllib.request.Request(
+            f"{HUB}/api/collections/universal_tokens/records?perPage=500",
+            headers={"Authorization": tok},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            tokens = {r.get("token", "") for r in json.loads(resp.read()).get("items", [])}
+        req = urllib.request.Request(
+            f"{HUB}/api/collections/systems/records?perPage=500",
+            headers={"Authorization": tok},
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            systems = {r.get("name", "") for r in json.loads(resp.read()).get("items", [])}
     except Exception:
-        tokens = {}
-    _load_security_tokens._cache = {"mtime": mtime, "tokens": tokens}
-    return tokens
+        return  # keep the previous cache on any error
+    with cache["lock"]:
+        cache["tokens"] = tokens
+        cache["systems"] = systems
+        cache["ts"] = now
 
 
-_load_security_tokens._cache = {}
+def _is_universal_token(token: str) -> bool:
+    _refresh_beszel_auth()
+    with _beszel_auth_cache["lock"]:
+        return token in _beszel_auth_cache["tokens"]
+
+
+def _is_known_system(name: str) -> bool:
+    _refresh_beszel_auth()
+    with _beszel_auth_cache["lock"]:
+        return name in _beszel_auth_cache["systems"]
 
 
 def _make_ingest_provider():
-    """Build the static-token provider. Imported lazily so the module still
+    """Build the beszel-token provider. Imported lazily so the module still
     loads (read-only endpoints keep working) even if hermes_cli moves."""
     from hermes_cli.dashboard_auth.base import (
         DashboardAuthProvider,
@@ -744,15 +788,15 @@ def _make_ingest_provider():
             token = (token or "").strip()
             if not token:
                 return None
-            # constant-time compare against every configured machine token
-            for machine_id, expected in _load_security_tokens().items():
-                if expected and hmac.compare_digest(token, expected):
-                    return TokenPrincipal(
-                        principal=machine_id,
-                        provider=self.name,
-                        scopes=("security:ingest",),
-                    )
-            return None
+            if not _is_universal_token(token):
+                return None
+            # principal is a placeholder — the real machine_id is taken from the
+            # request body and checked against beszel's systems table in ingest.
+            return TokenPrincipal(
+                principal="authenticated-agent",
+                provider=self.name,
+                scopes=("security:ingest",),
+            )
 
         # --- abstract OAuth/session methods: token-only provider, never used ---
         def start_login(self, *, redirect_uri):  # pragma: no cover
@@ -951,14 +995,15 @@ def _ingest_one(conn: sqlite3.Connection, machine_id: str, ev: dict) -> bool:
 async def security_ingest(request: Request):
     """Receive a batch of security events from a remote/local agent.
 
-    Auth: bearer token, verified by the token-auth seam. The principal's
-    ``principal`` field IS the machine_id (token → machine binding in
-    security_tokens.json), so a client cannot spoof another machine.
+    Auth: bearer token = a beszel universal token (verified by the token-auth
+    seam via the beszel PB API). The machine identity is the agent's
+    self-reported ``machine_id``, which must equal a system NAME registered in
+    beszel (checked against the systems table) — so an agent can't invent an
+    arbitrary machine, and machines are managed entirely from the beszel UI.
     """
     principal = getattr(request.state, "token_principal", None)
     if principal is None or "security:ingest" not in getattr(principal, "scopes", ()):
         raise HTTPException(401, "unauthenticated")
-    machine_id = principal.principal
 
     try:
         body = await request.json()
@@ -969,6 +1014,13 @@ async def security_ingest(request: Request):
         raise HTTPException(400, "events must be a list")
     if len(events) > _MAX_BATCH:
         raise HTTPException(400, f"batch too large (max {_MAX_BATCH})")
+
+    # machine_id is self-reported, but must be a beszel-registered system name.
+    machine_id = body.get("machine_id") if isinstance(body, dict) else None
+    if not isinstance(machine_id, str) or not machine_id:
+        raise HTTPException(400, "machine_id is required")
+    if not _is_known_system(machine_id):
+        raise HTTPException(401, "unknown machine_id")
 
     conn = _sec_db()
     accepted = rejected = 0

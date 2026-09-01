@@ -87,7 +87,10 @@ if not items:
 print(f"PASS 2. machines ({len(items)} machine(s))")
 
 # 3. ingest (agent token auth) — push one harmless test event
+#    machine_id must be a beszel-registered system name; grab the first machine
+#    from the machines endpoint we already fetched above.
 from datetime import datetime, timezone
+mid = items[0].get("name") or items[0].get("id")
 ev = {
     "event_id": "smoke:" + datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S"),
     "ts": datetime.now(timezone.utc).isoformat(),
@@ -97,14 +100,14 @@ ev = {
     "raw_excerpt": "smoke test",
 }
 code, body = post("/api/plugins/beszel/security/ingest",
-                  {"events": [ev]}, auth=token)
+                  {"machine_id": mid, "events": [ev]}, auth=token)
 if code != 200:
     print(f"FAIL 3. ingest -> {code} {body[:200]}")
     sys.exit(1)
 print("PASS 3. ingest")
 
 # 3b. ingest without token must be rejected (401)
-code, body = post("/api/plugins/beszel/security/ingest", {"events": [ev]})
+code, body = post("/api/plugins/beszel/security/ingest", {"machine_id": mid, "events": [ev]})
 if code != 401:
     print(f"FAIL 3b. ingest w/o token should be 401, got {code}")
     sys.exit(1)

@@ -25,7 +25,7 @@ Control host:      beszel hub (PocketBase)   token auth + idempotent UPSERT + Ge
 - Multi-machine architecture: agents are stateless pushers (60s window merging to survive floods); the centre is the single writer. `event_id` idempotent UPSERT; a jsonl disk buffer with automatic retry covers outages
 - Centre-side GeoIP enrichment (dbip-city-lite, monthly auto-update + hot reload); the attack map renders real coordinates
 - Attacker cards (aggregated per IP), per-IP timeline, live event stream, global filters (`ip:` `type:` `country:` syntax), CSV/JSON export, 90-day auto rotation
-- Security: bearer tokens (hmac constant-time compare; machine_id derived from the token, not client input), strict input validation (type whitelist / public IP / time window / count cap / batch cap), fully parameterized SQL
+- Security: bearer token reuses beszel's universal token (managed in the web UI at `/settings/tokens`), machine_id checked against beszel's systems table, strict input validation (type whitelist / public IP / time window / count cap / batch cap), fully parameterized SQL
 
 ## Repository layout
 
@@ -86,8 +86,9 @@ Centre-side config files (all under `~/.hermes/plugins/beszel/`, chmod 0600, **n
 
 | File | Format | Purpose |
 |---|---|---|
-| `security_tokens.json` | `{"tokens": {"<machine_id>": "<random token>"}}` | Per-agent ingest credentials. Generate tokens with `openssl rand -hex 32`; **machine_id must equal the agent's `SEC_MACHINE_ID` (hostname by default)** |
 | `machine_locations.json` | `{"<machine_id or name>": {"lat": .., "lon": .., "city": .., "country": ..}}` | Manual coordinate overrides (fallback when GeoIP misjudges an IP range), optional |
+
+> **Auth no longer uses a separate `security_tokens.json`.** The agent's ingest credential is beszel's **universal token** (managed in the beszel web UI under `/settings/tokens`), and the machine identity is the system name registered in beszel (the `systems` table). To add a new machine, add a system in the beszel UI — no separate security-event token needed.
 
 Environment variables (systemd user unit or `.env`):
 
@@ -111,10 +112,10 @@ gunzip /root/hermes-workspace/dbip-city-lite.mmdb.gz
 #### 5. Verify
 
 ```bash
-# Push one test event from the centre (replace <token> with a value from security_tokens.json)
+# Push one test event from the centre (replace <token> with the beszel universal token, <machine> with a beszel system name)
 curl -s -X POST http://127.0.0.1:9119/api/plugins/beszel/security/ingest \
   -H "Content-Type: application/json" -H "Authorization: Bearer <token>" \
-  -d '{"events":[{"event_id":"smoke:1","event_type":"auth_fail","src_ip":"8.8.8.8",
+  -d '{"machine_id":"<machine>","events":[{"event_id":"smoke:1","event_type":"auth_fail","src_ip":"8.8.8.8",
        "ts":"'"$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"'","count":1,"raw_excerpt":"smoke test"}]}'
 # Expect: {"ok":true,"accepted":1,...}; open the beszel tab in the dashboard to see the room
 ```
@@ -142,7 +143,7 @@ Three log sources (default paths below; a missing log simply disables that sourc
 ```bash
 mkdir -p /opt/beszel-sec-agent
 cp agent/security_collector.py /opt/beszel-sec-agent/
-echo "<this machine's token from the centre's security_tokens.json>" > /opt/beszel-sec-agent/agent_token.txt
+echo "<beszel universal token (the one in the hub's /settings/tokens)>" > /opt/beszel-sec-agent/agent_token.txt
 chmod 600 /opt/beszel-sec-agent/agent_token.txt
 
 # Optional: operator-owned IPs/ranges (events from these are never recorded as attacks)
@@ -163,9 +164,9 @@ Key options:
 |---|---|---|
 | `--push` | off | Without it the collector writes a local SQLite DB (single-host mode) |
 | `--center-url` | — | The centre's ingest URL |
-| `--token-file` | — | Bearer token file (0600); preferred over `--token` |
+| `--token-file` | — | beszel universal token file (0600); preferred over `--token` |
 | `--flush-interval` | 30 | Push interval (seconds) |
-| `SEC_MACHINE_ID` | hostname | Machine identity; must match a key in the centre's token file |
+| `SEC_MACHINE_ID` | hostname | Machine identity; must equal a beszel-registered system name (hostname matches by default) |
 | `SEC_TRUSTED_SOURCES_FILE` | `<repo>../security-trusted-sources.json` | Trusted-sources list path |
 
 #### 3. Verify

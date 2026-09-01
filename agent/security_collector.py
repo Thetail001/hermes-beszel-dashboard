@@ -227,7 +227,7 @@ class Pusher:
             self._buffer(batch)
 
     def _post(self, batch: list):
-        data = json.dumps({"events": batch}).encode()
+        data = json.dumps({"machine_id": self.machine_id, "events": batch}).encode()
         req = urllib.request.Request(
             self.center_url, data=data,
             headers={"Content-Type": "application/json",
@@ -785,9 +785,9 @@ if __name__ == "__main__":
                     help="push events to the centre /security/ingest instead of writing local SQLite")
     ap.add_argument("--center-url", default="",
                     help="centre ingest URL, e.g. https://host/api/plugins/beszel/security/ingest")
-    ap.add_argument("--token", default="", help="agent bearer token")
+    ap.add_argument("--token", default="", help="beszel universal token (from the hub's /settings/tokens)")
     ap.add_argument("--token-file", default="",
-                    help="file containing the bearer token (preferred over --token; keep it 0600)")
+                    help="file containing the beszel universal token (preferred over --token; keep it 0600)")
     ap.add_argument("--flush-interval", type=int, default=30,
                     help="seconds between pushes (default 30)")
     args = ap.parse_args()
