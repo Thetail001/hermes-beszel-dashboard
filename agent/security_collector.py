@@ -28,7 +28,14 @@ from pathlib import Path
 from typing import Optional
 
 # ------------------------------------------------------------------ config
+# Local direct-write SQLite (centre-side only — agents run push mode and never
+# touch this). Do NOT derive any agent-side path from DB_PATH.
 DB_PATH = Path("/root/hermes-workspace/reports/security-events.db")
+# Push buffer: where failed pushes are buffered across restarts. Must be local
+# to THIS machine — agents don't have the centre's /root/hermes-workspace.
+BUFFER_FILE = Path(os.environ.get(
+    "SEC_BUFFER_FILE",
+    str(Path(__file__).resolve().parent / "security-push-buffer.jsonl")))
 FAIL2BAN_LOG = Path("/var/log/fail2ban.log")
 NGINX_LOG = Path("/var/log/nginx/access.log")
 AUTH_LOG = Path("/var/log/auth.log")
@@ -804,7 +811,7 @@ if __name__ == "__main__":
         if not args.center_url or not token:
             print("error: --push requires --center-url and --token/--token-file", file=sys.stderr)
             sys.exit(2)
-        buffer_path = DB_PATH.parent / "security-push-buffer.jsonl"
+        buffer_path = BUFFER_FILE
         pusher = Pusher(args.center_url, token, MACHINE_ID, buffer_path, args.flush_interval)
 
     collector = Collector(DB_PATH, pusher=pusher)
