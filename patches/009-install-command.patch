@@ -1,0 +1,77 @@
+diff --git a/internal/site/src/components/add-system.tsx b/internal/site/src/components/add-system.tsx
+index 4891df2..8f21c10 100644
+--- a/internal/site/src/components/add-system.tsx
++++ b/internal/site/src/components/add-system.tsx
+@@ -242,7 +242,7 @@ export const SystemDialog = ({ setOpen, system }: { setOpen: (open: boolean) =>
+ 									{
+ 										text: t({ message: "Homebrew command", context: "Button to copy install command" }),
+ 										onClick: async () =>
+-											copyLinuxCommand(isUnixSocket ? hostValue : port.current?.value, publicKey, token, true),
++											copyLinuxCommand(isUnixSocket ? hostValue : port.current?.value, publicKey, token, "brew"),
+ 										icons: [AppleIcon, TuxIcon],
+ 									},
+ 									{
+@@ -254,7 +254,7 @@ export const SystemDialog = ({ setOpen, system }: { setOpen: (open: boolean) =>
+ 									{
+ 										text: t({ message: "FreeBSD command", context: "Button to copy install command" }),
+ 										onClick: async () =>
+-											copyLinuxCommand(isUnixSocket ? hostValue : port.current?.value, publicKey, token),
++											copyLinuxCommand(isUnixSocket ? hostValue : port.current?.value, publicKey, token, "freebsd"),
+ 										icons: [FreeBsdIcon],
+ 									},
+ 									{
+diff --git a/internal/site/src/components/install-dropdowns.tsx b/internal/site/src/components/install-dropdowns.tsx
+index 4c6c708..46db9ff 100644
+--- a/internal/site/src/components/install-dropdowns.tsx
++++ b/internal/site/src/components/install-dropdowns.tsx
+@@ -47,12 +47,25 @@ export function copyDockerRun(port = "45876", publicKey: string, token: string)
+ 	)
+ }
+ 
+-export function copyLinuxCommand(port = "45876", publicKey: string, token: string, brew = false) {
++export function copyLinuxCommand(port = "45876", publicKey: string, token: string, variant: "linux" | "brew" | "freebsd" = "linux") {
++	// Linux：本项目命令 —— beszel agent + security-collector 一步装
++	if (variant === "linux") {
++		// security ingest 挂在 hermes 面板同 origin 下（iframe 是相对路径加载，
++		// 所以 window.location.origin 就是 hermes dashboard 的公网地址）
++		const centerUrl = `${window.location.origin}/api/plugins/beszel/security/ingest`
++		let cmd = `curl -fsSL https://raw.githubusercontent.com/Thetail001/hermes-beszel-dashboard/master/agent/install-agent.sh | bash -s -- -p ${port} -k "${publicKey}" -t "${token}" -url "${getHubURL()}" -center "${centerUrl}"`
++		if ((i18n.locale + navigator.language).includes("zh-CN")) {
++			cmd += ` --china-mirrors`
++		}
++		copyToClipboard(cmd)
++		return
++	}
++	// brew / freebsd：官方脚本（security-collector 是 Linux 探针，这些平台只装 beszel agent）
+ 	let cmd = `curl -sL ${getScriptUrl(
+-		brew ? "/brew" : ""
++		variant === "brew" ? "/brew" : ""
+ 	)} -o /tmp/install-agent.sh && chmod +x /tmp/install-agent.sh && /tmp/install-agent.sh -p ${port} -k "${publicKey}" -t "${token}" -url "${getHubURL()}"`
+ 	// brew script does not support --china-mirrors
+-	if (!brew && (i18n.locale + navigator.language).includes("zh-CN")) {
++	if (variant !== "brew" && (i18n.locale + navigator.language).includes("zh-CN")) {
+ 		cmd += ` --china-mirrors`
+ 	}
+ 	copyToClipboard(cmd)
+diff --git a/internal/site/src/components/routes/settings/tokens-fingerprints.tsx b/internal/site/src/components/routes/settings/tokens-fingerprints.tsx
+index a6859fc..5d1394c 100644
+--- a/internal/site/src/components/routes/settings/tokens-fingerprints.tsx
++++ b/internal/site/src/components/routes/settings/tokens-fingerprints.tsx
+@@ -272,7 +272,7 @@ const ActionsButtonUniversalToken = memo(({ token, checked }: { token: string; c
+ 		},
+ 		{
+ 			text: t({ message: "Homebrew command", context: "Button to copy install command" }),
+-			onClick: () => copyLinuxCommand(port, publicKey, token, true),
++			onClick: () => copyLinuxCommand(port, publicKey, token, "brew"),
+ 			icons: [TuxIcon, AppleIcon],
+ 		},
+ 		{
+@@ -282,7 +282,7 @@ const ActionsButtonUniversalToken = memo(({ token, checked }: { token: string; c
+ 		},
+ 		{
+ 			text: t({ message: "FreeBSD command", context: "Button to copy install command" }),
+-			onClick: () => copyLinuxCommand(port, publicKey, token),
++			onClick: () => copyLinuxCommand(port, publicKey, token, "freebsd"),
+ 			icons: [FreeBsdIcon],
+ 		},
+ 		{
