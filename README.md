@@ -10,7 +10,7 @@
 - 后端：`plugin_api.py`（FastAPI router），挂在 `/api/plugins/beszel/` 下，负责 PocketBase 反代 + 安全事件 API
 - 安装：中心侧一条命令装进 `~/.hermes/plugins/beszel/`，agent 侧一条命令装采集器
 
-不 fork beszel——前端用「补丁重放」模式吃上游更新；后端以插件 API 形式挂载，beszel 原有功能（系统指标、agent 通道、机器管理）原样保留。
+不 fork beszel——前端源码 vendor 进本仓库（上游源码进 git 历史，我们的魔改 commit 在其上）；后端以插件 API 形式挂载，beszel 原有功能（系统指标、agent 通道、机器管理）原样保留。
 
 ```
  各 VPS:   beszel-agent(资源指标) + security-collector(安全事件)
@@ -45,16 +45,11 @@
 │   └── security-collector.service  # systemd unit 示例
 ├── scripts/
 │   └── release.sh              # 构建前端 dist → 打包 → 创建 GitHub Release
-├── patches/                    # beszel 前端魔改补丁（版本化，可重放）
-│   ├── 001..007-*.patch        #   反代 baseURL、去 beszel 登录页、tab 接入等
-│   ├── 007-security-ui-enhancements.tsx   # 007 补丁应用后的完整前端快照
-│   ├── 008-attack-map.patch    #   攻击地图 + 机器列表接入 security/machines
-│   ├── 008-attack-map.tsx      #   008 应用后的完整前端快照（下一个补丁的基底）
-│   ├── 009-install-command.patch  # 复制安装命令改导出本项目安装器（Linux/brew/freebsd）
-│   ├── 010-machine-selector.patch # 机器选择条从 Attackers 面板移到顶部 Header（全局切换）
-│   ├── 010-machine-selector.tsx    # 010 应用后的完整前端快照（下一个补丁的基底）
-│   ├── 011-silent-refresh.patch    # 自动刷新改静默更新（无感刷新不打断浏览 + 修旧筛选覆盖数据的竞态）
-│   └── 011-silent-refresh.tsx      # 011 应用后的完整前端快照（当前基底）
+├── frontend/                   # beszel 前端源码（vendor 自 henrygd/beszel internal/site）
+│   ├── VENDOR.md               #   上游 URL + commit 基线 + 更新说明
+│   ├── src/                    #   beszel 源码 + 我们的魔改（git 历史直接记录）
+│   │   └── components/routes/security.tsx   # Security 监控室（攻击地图/攻击者/事件时间线/封禁）
+│   └── package.json            #   加了 d3-geo + topojson-client（攻击地图）
 ├── plugin/
 │   ├── manifest.json           # hermes 插件清单
 │   └── dashboard/
@@ -163,19 +158,15 @@ ingest 认证复用 beszel 的 token 体系，**无需为安全事件单独生�
 普通安装**不需要**构建前端（预构建产物在 GitHub Release）。只有开发/改前端时才需要：
 
 ```bash
-# 准备 beszel 前端源码 + 重放补丁
-git clone https://github.com/henrygd/beszel /tmp/beszel
-cd /tmp/beszel/internal/site
-for p in 001 002 003 004 005 006 007 008; do
-  git apply /path/to/hermes-beszel-dashboard/patches/$p-*.patch
-done
+# 前端已 vendor 在 frontend/，直接构建
+cd frontend
 npm install && npm run build
 
 # 发布新版本（构建 dist → 打包 → 创建 GitHub Release）
 scripts/release.sh v0.1.0-beta "版本说明"
 ```
 
-> 补丁基于 2026-08 的 beszel master。上游大版本更新后补丁可能需要适配，`patches/NNN-*.tsx` 快照文件是 diff 基底。
+> 前端源码 vendor 自 [henrygd/beszel](https://github.com/henrygd/beszel) 的 `internal/site`（基线 commit 见 `frontend/VENDOR.md`）。我们的魔改直接 commit 在 vendor 基线之上，上游更新时 diff `internal/site` 与 `frontend/` 即可看到上游改动。
 
 ## License
 

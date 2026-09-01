@@ -10,7 +10,7 @@
 - Back-end: `plugin_api.py` (FastAPI router) under `/api/plugins/beszel/`, doing PocketBase reverse-proxying + the security-events API
 - Install: one command on the centre side into `~/.hermes/plugins/beszel/`, one command on each agent
 
-No fork of beszel — the front-end tracks upstream via a "patch replay" model; the back-end mounts as a plugin API, so beszel's own features (system metrics, agent channel, machine management) are kept untouched.
+No fork of beszel — the front-end is vendored (upstream source tracked in git history, our modifications committed on top); the back-end mounts as a plugin API, so beszel's own features (system metrics, agent channel, machine management) are kept untouched.
 
 ```
 VPSes ():  beszel-agent (metrics)  + security-collector (security events)
@@ -45,16 +45,11 @@ Control host:      beszel hub (PocketBase)   token auth + idempotent UPSERT + Ge
 │   └── security-collector.service  # example systemd unit
 ├── scripts/
 │   └── release.sh              # build front-end dist → package → create GitHub Release
-├── patches/                    # front-end patches against beszel (versioned, replayable)
-│   ├── 001..007-*.patch        #   reverse-proxy baseURL, strip beszel login, tab wiring…
-│   ├── 007-security-ui-enhancements.tsx   # full front-end snapshot after patch 007
-│   ├── 008-attack-map.patch    #   attack map + machine list via security/machines
-│   ├── 008-attack-map.tsx      #   full front-end snapshot after 008 (base for the next patch)
-│   ├── 009-install-command.patch  # copy-install-command now exports this project's installer (Linux/brew/freebsd)
-│   ├── 010-machine-selector.patch # machine selector moved from the Attackers card to the top header (global)
-│   ├── 010-machine-selector.tsx    # full front-end snapshot after 010 (base for the next patch)
-│   ├── 011-silent-refresh.patch    # auto-refresh is now a silent update (no scroll jump; fixes stale-filter race)
-│   └── 011-silent-refresh.tsx      # full front-end snapshot after 011 (current base)
+├── frontend/                   # beszel front-end source (vendored from henrygd/beszel internal/site)
+│   ├── VENDOR.md               #   upstream URL + commit baseline + update notes
+│   ├── src/                    #   beszel source + our modifications (recorded in git history)
+│   │   └── components/routes/security.tsx   # Security room (attack map / attackers / IP timeline / bans)
+│   └── package.json            #   adds d3-geo + topojson-client (attack map)
 ├── plugin/
 │   ├── manifest.json           # hermes plugin manifest
 │   └── dashboard/
@@ -163,19 +158,15 @@ Both are accepted. To add a machine: "Add System" and copy key+token, or just re
 Normal installs do **not** need a front-end build (prebuilt artifacts are on GitHub Release). Only when developing/changing the front-end:
 
 ```bash
-# Prepare beszel front-end source + replay patches
-git clone https://github.com/henrygd/beszel /tmp/beszel
-cd /tmp/beszel/internal/site
-for p in 001 002 003 004 005 006 007 008; do
-  git apply /path/to/hermes-beszel-dashboard/patches/$p-*.patch
-done
+# The front-end is vendored under frontend/, build it directly
+cd frontend
 npm install && npm run build
 
 # Release a new version (build dist → package → create GitHub Release)
 scripts/release.sh v0.1.0-beta "release notes"
 ```
 
-> Patches target beszel master as of 2026-08. Major upstream releases may need patch adaptations — the `patches/NNN-*.tsx` snapshots are the diff bases.
+> The front-end source is vendored from [henrygd/beszel](https://github.com/henrygd/beszel) `internal/site` (baseline commit in `frontend/VENDOR.md`). Our modifications are committed directly on top of the vendor baseline — to review upstream changes, diff `internal/site` against `frontend/`.
 
 ## License
 

@@ -14,7 +14,7 @@
 # 前置：
 #   - node/npm（构建前端）
 #   - gh CLI 已认证（gh auth status）
-#   - beszel 源码在 /tmp/beszel-study/beszel（用于构建前端，重放补丁后 build）
+#   - beszel 前端已 vendor 在 frontend/（构建产物 dist/ 从那里生成）
 set -euo pipefail
 
 TAG="${1:?用法: scripts/release.sh <tag> [notes]}"
@@ -33,12 +33,14 @@ gh auth status >/dev/null 2>&1 || fail "gh 未认证，先 gh auth login"
 
 # ---------------------------------------------------------------- 1. 构建前端
 info "构建前端 dist..."
-SITE_DIR="/tmp/beszel-study/beszel/internal/site"
+SITE_DIR="$ROOT/frontend"
 if [ ! -d "$SITE_DIR" ]; then
-  fail "找不到 beszel 前端源码：$SITE_DIR（先按 README 准备 beszel 源码并重放补丁）"
+  fail "找不到 vendored 前端源码：$SITE_DIR"
 fi
 
 cd "$SITE_DIR"
+# 首次构建前装依赖（node_modules 被 gitignore，不进仓库）
+[ -d node_modules ] || npm install
 npm run build 2>&1 | tail -3 || fail "前端构建失败"
 info "  前端构建完成"
 
