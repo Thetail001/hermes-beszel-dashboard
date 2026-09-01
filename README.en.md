@@ -1,6 +1,12 @@
 # hermes-beszel-dashboard
 
-> Drops the whole [beszel](https://github.com/henrygd/beszel) panel (lightweight server monitoring) into a [Hermes Agent](https://github.com/NousResearch/hermes-agent) dashboard plugin, and layers a multi-machine **Security Operations Room** on top: collection, aggregation, geolocation and an attack map for SSH brute-force / fail2ban / nginx scan events. 中文文档：[README.md](README.md)
+> **A [Hermes Agent](https://github.com/NousResearch/hermes-agent) dashboard plugin** that drops the whole [beszel](https://github.com/henrygd/beszel) panel (lightweight server monitoring) into Hermes' dashboard, and layers a multi-machine **Security Operations Room** on top: collection, aggregation, geolocation and an attack map for SSH brute-force / fail2ban / nginx scan events. 中文文档：[README.md](README.md)
+
+**This is not a standalone app** — it exists as a plugin and runs alongside hermes:
+
+- Front-end: beszel's full web panel, mounted as an iframe under the beszel tab of the hermes dashboard
+- Back-end: `plugin_api.py` (FastAPI router) under `/api/plugins/beszel/`, doing PocketBase reverse-proxying + the security-events API
+- Install: one command on the centre side into `~/.hermes/plugins/beszel/`, one command on each agent
 
 No fork of beszel — the front-end tracks upstream via a "patch replay" model; the back-end mounts as a plugin API, so beszel's own features (system metrics, agent channel, machine management) are kept untouched.
 

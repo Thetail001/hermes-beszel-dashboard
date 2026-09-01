@@ -1,6 +1,12 @@
 # hermes-beszel-dashboard
 
-> 把 [beszel](https://github.com/henrygd/beszel)（轻量服务器监控）的整个面板搬进 [Hermes Agent](https://github.com/NousResearch/hermes-agent) dashboard 的插件，并在其上叠加一个多机**监控室**（SSH 爆破 / fail2ban / nginx 扫描的采集、聚合、地理定位与攻击地图）。English README: [README.en.md](README.en.md)
+> **一个 [Hermes Agent](https://github.com/NousResearch/hermes-agent) dashboard 插件**：把 [beszel](https://github.com/henrygd/beszel)（轻量服务器监控）的整个面板搬进 Hermes 的 dashboard，并在其上叠加一个多机**监控室**（SSH 爆破 / fail2ban / nginx 扫描的采集、聚合、地理定位与攻击地图）。English README: [README.en.md](README.en.md)
+
+**这不是一个独立应用**，它以插件形式存在，随 hermes 一起运行：
+
+- 前端：beszel 的完整 Web 面板，以 iframe 形式挂载在 hermes dashboard 的 beszel tab 下
+- 后端：`plugin_api.py`（FastAPI router），挂在 `/api/plugins/beszel/` 下，负责 PocketBase 反代 + 安全事件 API
+- 安装：中心侧一条命令装进 `~/.hermes/plugins/beszel/`，agent 侧一条命令装采集器
 
 不 fork beszel——前端用「补丁重放」模式吃上游更新；后端以插件 API 形式挂载，beszel 原有功能（系统指标、agent 通道、机器管理）原样保留。
 
