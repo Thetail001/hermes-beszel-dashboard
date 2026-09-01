@@ -30,7 +30,13 @@
 ## 项目结构
 
 ```
-├── install.sh                  # 部署插件到 ~/.hermes/plugins/ + 白名单 + 重启
+├── install.sh                  # 中心侧安装脚本（一条命令）
+├── agent/
+│   ├── install-agent.sh        # agent 侧安装脚本（一条命令）
+│   ├── security_collector.py   # 安全事件探针：tail 三源日志，push 或本地直写
+│   └── security-collector.service  # systemd unit 示例
+├── scripts/
+│   └── release.sh              # 构建前端 dist → 打包 → 创建 GitHub Release
 ├── patches/                    # beszel 前端魔改补丁（版本化，可重放）
 │   ├── 001..007-*.patch        #   反代 baseURL、去 beszel 登录页、tab 接入等
 │   ├── 007-security-ui-enhancements.tsx   # 007 补丁应用后的完整前端快照
@@ -39,154 +45,109 @@
 ├── plugin/
 │   ├── manifest.json           # hermes 插件清单
 │   └── dashboard/
-│       ├── dist/               # beszel vite 构建产物（assets 部分不进 git）
+│       ├── dist/               # beszel vite 构建产物（assets 部分不进 git，走 release）
 │       └── plugin_api.py       # PocketBase 反代 + /security/* API（ingest/machines/events/...）
-├── agent/
-│   ├── security_collector.py   # 安全事件探针：tail 三源日志，push 或本地直写
-│   └── security-collector.service  # systemd unit 示例
 ├── hub/                        # 控制机部署物（beszel hub/agent systemd + nginx 反代示例）
+└── tests/
+    └── smoke.sh                # 部署后冒烟测试（登录→machines→ingest→无token拒收）
 ```
 
 ## 使用说明
 
+安装分两步：先在控制机装中心侧，再去每台被监控机装 agent 侧。
+
 ### 中心侧（控制机，跑 hermes + beszel hub 的那台）
 
-#### 1. 装 beszel hub
-
-按 [beszel 官方文档](https://beszel.dev) 安装 hub（PocketBase 内核，监听 `127.0.0.1:8090` 即可，不必暴露公网——面板流量走插件反代）。`hub/` 下有 systemd 参考件。
-
-#### 2. 构建前端产物
-
-需要 node/npm：
+**前置**：hermes 已安装（`hermes` 命令可用）。没装的话先装 Hermes Agent：
 
 ```bash
-git clone https://github.com/henrygd/beszel /tmp/beszel
-cd /tmp/beszel/internal/site
-# 依次应用补丁：001 → 008（顺序不能乱）
-for p in 001 002 003 004 005 006 007 008; do
-  git apply /path/to/hermes-beszel-dashboard/patches/$p-*.patch
-done
-# 008 的基底是 007 应用后的 security.tsx：应用 007 补丁后，
-# 先把 patches/007-security-ui-enhancements.tsx 复制为 src/components/routes/security.tsx
-# 再应用 008 补丁，最后把 008-attack-map.tsx 也复制过去（保持工作区与快照一致）
-npm install && npm run build
-cp -r dist/* /path/to/hermes-beszel-dashboard/plugin/dashboard/dist/
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```
 
-> 补丁基于 2026-08 的 beszel master（v0.14.x）。上游大版本更新后补丁可能需要适配，快照文件就是 diff 基底。
-
-#### 3. 部署插件 + 配置
+**一条命令安装**：
 
 ```bash
-cd hermes-beszel-dashboard
-./install.sh          # 拷插件到 ~/.hermes/plugins/beszel/ + 白名单 + 重启 dashboard
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/master/install.sh | bash
 ```
 
-中心侧配置文件（都在 `~/.hermes/plugins/beszel/`，权限 0600，**不进 git**）：
+脚本自动完成：
 
-| 文件 | 格式 | 作用 |
-|---|---|---|
-| `machine_locations.json` | `{"<machine_id或name>": {"lat": .., "lon": .., "city": .., "country": ..}}` | 机器坐标手动覆盖（GeoIP 把 IP 段判错时兜底），可选 |
+1. 安装 beszel hub（复用官方脚本，监听 `127.0.0.1:8090`，不暴露公网——面板流量走插件反代）
+2. 非交互创建 beszel superuser（`beszel superuser upsert`，**无需浏览器注册**，交互式询问邮箱密码）
+3. 从 GitHub Release 下载预构建的插件 dist（`dist/assets`/`index.html` 是 gitignore 的构建产物，走 release 分发）
+4. 白名单插件 + 写 beszel 凭据文件 + 下载 GeoIP 库（dbip-city-lite）
+5. 重启 dashboard
 
-> **认证不再用独立的 security_tokens.json**。agent 的 ingest 凭据 = beszel 的 **universal token**（在 beszel webui 的 `/settings/tokens` 里管理），机器身份 = beszel 里注册的系统名（`systems` 表）。连新机器时，在 beszel webui 里加系统即可，无需为安全事件单独生成 token。
+脚本最后会提示**一个手动步骤**：把 `BESZEL_SUPERUSER_EMAIL` 环境变量加进 hermes-dashboard 的 systemd user unit（`~/.config/systemd/user/hermes-dashboard.service` 的 `[Service]` 段）。这是 plugin_api.py 登录 beszel hub 需要的，漏了会白屏。
 
-环境变量（写入 systemd user unit 或 `.env`）：
-
-| 变量 | 默认 | 作用 |
-|---|---|---|
-| `BESZEL_SUPERUSER_EMAIL` | `admin@example.com` | PB superuser 身份（`_read_password()` 从 cred 文件读密码） |
-| `BESZEL_CRED_FILE` | `/root/hermes-workspace/reports/dashboard-credentials.txt` | 凭据文件路径（内容格式：`<email> / <password>` 行） |
-
-#### 4. 下载 GeoIP 库
-
-中心负责把 IP 翻译成坐标，agent 不需要：
-
-```bash
-mkdir -p /root/hermes-workspace/reports
-curl -Lo /root/hermes-workspace/dbip-city-lite.mmdb.gz \
-  https://download.db-ip.com/free/dbip-city-lite-$(date +%Y-%m).mmdb.gz
-gunzip /root/hermes-workspace/dbip-city-lite.mmdb.gz
-# 之后采集器/中心进程内线程每月自动检查更新，无需 cron
-```
-
-#### 5. 验证
-
-```bash
-# agent 侧推一条测试事件（把 <token> 换成 beszel universal token，<机器名> 换成 beszel 系统名）
-curl -s -X POST http://127.0.0.1:9119/api/plugins/beszel/security/ingest \
-  -H "Content-Type: application/json" -H "Authorization: Bearer <token>" \
-  -d '{"machine_id":"<机器名>","events":[{"event_id":"smoke:1","event_type":"auth_fail","src_ip":"8.8.8.8",
-       "ts":"'"$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"'","count":1,"raw_excerpt":"smoke test"}]}'
-# 期望：{"ok":true,"accepted":1,...}；浏览器打开 dashboard 的 beszel tab 能看到监控室数据
-```
-
-更完整的部署后冒烟测试（登录 → machines → ingest → 无 token 拒收，一条命令）：
-
-```bash
-tests/smoke.sh http://127.0.0.1:9119 <dashboard用户名> <dashboard密码> <某台机器的token>
-```
+装完后去 beszel webui（`http://127.0.0.1:8090`）登录，在 `/settings/tokens` 生成 **universal token**（或添加系统复制公钥+token），供 agent 侧使用。
 
 ### agent 侧（每台被监控 VPS）
 
-#### 1. 前置
+**一条命令安装**（去中心机 beszel webui 复制公钥和 token）：
 
-被采集的三类日志（路径都是默认值，不存在时会跳过对应源，不致命）：
+```bash
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/master/agent/install-agent.sh \
+  | bash -s -- -k "<公钥>" -t "<token>" -url "https://<中心域名>" \
+      -center "https://<中心域名>/api/plugins/beszel/security/ingest"
+```
+
+脚本自动完成：
+
+1. 安装 beszel agent（复用官方脚本，含 Cloudflare 挡时 fallback GitHub raw；`--china-mirrors` 可用国内镜像）
+2. 安装 security-collector（安全事件采集），token 复用 beszel 的（universal 或 per-system 均可，中心两种都认）
+3. 写 systemd unit + 启用两个服务 + 自检
+
+**agent 侧采集的三类日志**（默认路径，不存在时跳过对应源，不致命）：
 
 | 日志 | 默认路径 | 说明 |
 |---|---|---|
 | fail2ban | `/var/log/fail2ban.log` | ban/unban 事件 |
-| nginx | `/var/log/nginx/access.log` | 扫描/攻击路径（依赖你的 fail2ban nginx jail） |
+| nginx | `/var/log/nginx/access.log` | 扫描/攻击路径（依赖 fail2ban nginx jail） |
 | sshd | `/var/log/auth.log` | 爆破尝试（含用户名提取） |
 
-#### 2. 部署
-
-```bash
-mkdir -p /opt/beszel-sec-agent
-cp agent/security_collector.py /opt/beszel-sec-agent/
-echo "<beszel universal token（hub 的 /settings/tokens 里那个）>" > /opt/beszel-sec-agent/agent_token.txt
-chmod 600 /opt/beszel-sec-agent/agent_token.txt
-
-# 可选：运维自身 IP/网段（这些来源的事件不记为攻击）
-cat > /opt/beszel-sec-agent/trusted-sources.json << 'EOF'
-{"trusted_sources": ["203.0.113.7"]}
-EOF
-
-cp agent/security-collector.service /etc/systemd/system/
-# 编辑 unit：把 --center-url 换成你的中心地址（
-#   https://your-centre-host/api/plugins/beszel/security/ingest
-# ），按需设 SEC_MACHINE_ID / SEC_TRUSTED_SOURCES_FILE 环境变量
-systemctl daemon-reload && systemctl enable --now security-collector
-```
-
-关键参数：
-
-| 参数/环境变量 | 默认 | 说明 |
-|---|---|---|
-| `--push` | 关 | 不加则本地直写 SQLite（单机模式） |
-| `--center-url` | 无 | 中心的 ingest URL |
-| `--token-file` | 无 | beszel universal token 文件（0600），比 `--token` 稳 |
-| `--flush-interval` | 30 | 推送周期（秒） |
-| `SEC_MACHINE_ID` | hostname | 机器标识，必须 = beszel 里注册的系统名（默认 hostname 正好一致） |
-| `SEC_TRUSTED_SOURCES_FILE` | `<repo>../security-trusted-sources.json` | 可信来源列表路径 |
-
-#### 3. 验证
+**验证**：
 
 ```bash
 systemctl status security-collector
-journalctl -u security-collector -f     # 应看到 [collector] starting, mode=push
+journalctl -u security-collector -f   # 应看到 [collector] starting, mode=push
 ```
 
 断网/中心不可达时事件写入 `security-push-buffer.jsonl`（`--flush-interval` 周期自动补推，推完即清），恢复后无需人工干预。
 
+### 认证与 token
+
+ingest 认证复用 beszel 的 token 体系，**无需为安全事件单独生成 token**：
+
+- **per-system token**（UUID，webui「添加系统」时生成，存 `fingerprints` 表）：绑死一台机器，中心从 token 反查机器名，防伪造最强
+- **universal token**（`/settings/tokens` 里生成，存 `universal_tokens` 表）：多台机器共用，机器身份由 agent 自报 + 查 `systems` 表校验
+
+两种 token 都认，agent 侧填哪个都行。连新机器：要么 webui「添加系统」复制公钥+token，要么直接用 universal token（自动注册）。
+
 ### 面板使用
 
 - hermes dashboard → beszel tab：系统监控（beszel 原生）+ 监控室（安全事件）
-- 监控室筛选语法：`ip:1.2.3.4`、`type:auth_fail`、`country:NL`，可组合
+- 监控室筛选语法：`ip:1.2.3.4`、`type:auth_fail`、`country:NL`，可组合；Attackers / Active Bans 支持搜索、筛选、排序、翻页、点开 IP 详情
 - 事件类型：`ban` / `unban` / `scan` / `attack` / `auth_fail` / `auth_success`
 
-## 上游升级
+## 开发：构建前端 + 发布
 
-beszel 发新版后：重拉上游 → 按序重放 `patches/`（以 `patches/NNN-*.tsx` 快照为基底逐个 diff）→ build → 更新 `plugin/dashboard/dist/`。
+普通安装**不需要**构建前端（预构建产物在 GitHub Release）。只有开发/改前端时才需要：
+
+```bash
+# 准备 beszel 前端源码 + 重放补丁
+git clone https://github.com/henrygd/beszel /tmp/beszel
+cd /tmp/beszel/internal/site
+for p in 001 002 003 004 005 006 007 008; do
+  git apply /path/to/hermes-beszel-dashboard/patches/$p-*.patch
+done
+npm install && npm run build
+
+# 发布新版本（构建 dist → 打包 → 创建 GitHub Release）
+scripts/release.sh v0.1.0-beta "版本说明"
+```
+
+> 补丁基于 2026-08 的 beszel master。上游大版本更新后补丁可能需要适配，`patches/NNN-*.tsx` 快照文件是 diff 基底。
 
 ## License
 

@@ -22,7 +22,7 @@
 # 示例（universal token 一键装，含国内镜像）：
 #   curl -fsSL .../install-agent.sh | bash -s -- \
 #     -k "ssh-ed25519 AAAA..." \
-#     -t "zKrqwQwM1..." \
+#     -t "<你的 universal token>" \
 #     -url "https://example.com" \
 #     -center "https://example.com/api/plugins/beszel/security/ingest" \
 #     --china-mirrors

@@ -30,7 +30,13 @@ Control host:      beszel hub (PocketBase)   token auth + idempotent UPSERT + Ge
 ## Repository layout
 
 ```
-├── install.sh                  # deploy plugin to ~/.hermes/plugins/ + whitelist + restart
+├── install.sh                  # centre-side install script (one command)
+├── agent/
+│   ├── install-agent.sh        # agent-side install script (one command)
+│   ├── security_collector.py   # security probe: tails 3 logs, push or local-write mode
+│   └── security-collector.service  # example systemd unit
+├── scripts/
+│   └── release.sh              # build front-end dist → package → create GitHub Release
 ├── patches/                    # front-end patches against beszel (versioned, replayable)
 │   ├── 001..007-*.patch        #   reverse-proxy baseURL, strip beszel login, tab wiring…
 │   ├── 007-security-ui-enhancements.tsx   # full front-end snapshot after patch 007
@@ -39,154 +45,109 @@ Control host:      beszel hub (PocketBase)   token auth + idempotent UPSERT + Ge
 ├── plugin/
 │   ├── manifest.json           # hermes plugin manifest
 │   └── dashboard/
-│       ├── dist/               # beszel vite build output (assets partially gitignored)
+│       ├── dist/               # beszel vite build output (assets partially gitignored, shipped via release)
 │       └── plugin_api.py       # PocketBase reverse proxy + /security/* API (ingest/machines/events/…)
-├── agent/
-│   ├── security_collector.py   # security probe: tails 3 logs, push or local-write mode
-│   └── security-collector.service  # example systemd unit
 ├── hub/                        # control-host deployment refs (beszel hub/agent units + nginx example)
+└── tests/
+    └── smoke.sh                # post-deploy smoke test (login→machines→ingest→no-token rejection)
 ```
 
 ## Usage
 
+Installation is two steps: the centre host first, then each monitored machine.
+
 ### Centre side (the host running hermes + the beszel hub)
 
-#### 1. Install the beszel hub
-
-Install the hub per the [official beszel docs](https://beszel.dev) (PocketBase core; listening on `127.0.0.1:8090` is enough — panel traffic goes through the plugin's reverse proxy). See `hub/` for reference systemd units.
-
-#### 2. Build the front-end
-
-Requires node/npm:
+**Prerequisite**: hermes installed (`hermes` on PATH). If not, install Hermes Agent first:
 
 ```bash
-git clone https://github.com/henrygd/beszel /tmp/beszel
-cd /tmp/beszel/internal/site
-# Apply patches in order: 001 → 008 (order matters)
-for p in 001 002 003 004 005 006 007 008; do
-  git apply /path/to/hermes-beszel-dashboard/patches/$p-*.patch
-done
-# Patch 008's base is the security.tsx from after 007: after applying 007,
-# copy patches/007-security-ui-enhancements.tsx to src/components/routes/security.tsx,
-# then apply 008, then also copy 008-attack-map.tsx (keeps workdir == snapshot)
-npm install && npm run build
-cp -r dist/* /path/to/hermes-beszel-dashboard/plugin/dashboard/dist/
+curl -fsSL https://hermes-agent.nousresearch.com/install.sh | bash
 ```
 
-> Patches target beszel master as of 2026-08 (v0.14.x). Major upstream releases may need patch adaptations — the snapshot files are the diff bases.
-
-#### 3. Deploy the plugin + configure
+**One-command install**:
 
 ```bash
-cd hermes-beszel-dashboard
-./install.sh          # copies the plugin into ~/.hermes/plugins/beszel/ + whitelist + dashboard restart
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/master/install.sh | bash
 ```
 
-Centre-side config files (all under `~/.hermes/plugins/beszel/`, chmod 0600, **never committed**):
+The script handles:
 
-| File | Format | Purpose |
-|---|---|---|
-| `machine_locations.json` | `{"<machine_id or name>": {"lat": .., "lon": .., "city": .., "country": ..}}` | Manual coordinate overrides (fallback when GeoIP misjudges an IP range), optional |
+1. beszel hub install (reuses the official script; listens on `127.0.0.1:8090`, no public exposure — panel traffic goes through the plugin's reverse proxy)
+2. Non-interactive beszel superuser creation (`beszel superuser upsert`, **no browser registration**; prompts for email/password)
+3. Downloads the prebuilt plugin dist from GitHub Release (`dist/assets`/`index.html` are gitignored build artifacts shipped via release)
+4. Plugin whitelist + beszel credentials file + GeoIP DB (dbip-city-lite)
+5. Dashboard restart
 
-> **Auth no longer uses a separate `security_tokens.json`.** The agent's ingest credential is beszel's **universal token** (managed in the beszel web UI under `/settings/tokens`), and the machine identity is the system name registered in beszel (the `systems` table). To add a new machine, add a system in the beszel UI — no separate security-event token needed.
+The script ends with **one manual step**: add `BESZEL_SUPERUSER_EMAIL` to the hermes-dashboard systemd user unit (`~/.config/systemd/user/hermes-dashboard.service`, `[Service]` section). plugin_api.py needs it to log into the beszel hub — missing it blanks the tab.
 
-Environment variables (systemd user unit or `.env`):
-
-| Variable | Default | Purpose |
-|---|---|---|
-| `BESZEL_SUPERUSER_EMAIL` | `admin@example.com` | PB superuser identity (`_read_password()` reads the password from the cred file) |
-| `BESZEL_CRED_FILE` | `/root/hermes-workspace/reports/dashboard-credentials.txt` | Credentials file path (line format: `<email> / <password>`) |
-
-#### 4. Download the GeoIP database
-
-The centre translates IPs to coordinates; agents never need the mmdb:
-
-```bash
-mkdir -p /root/hermes-workspace/reports
-curl -Lo /root/hermes-workspace/dbip-city-lite.mmdb.gz \
-  https://download.db-ip.com/free/dbip-city-lite-$(date +%Y-%m).mmdb.gz
-gunzip /root/hermes-workspace/dbip-city-lite.mmdb.gz
-# A thread inside the centre process checks for a newer build monthly — no cron needed
-```
-
-#### 5. Verify
-
-```bash
-# Push one test event from the centre (replace <token> with the beszel universal token, <machine> with a beszel system name)
-curl -s -X POST http://127.0.0.1:9119/api/plugins/beszel/security/ingest \
-  -H "Content-Type: application/json" -H "Authorization: Bearer <token>" \
-  -d '{"machine_id":"<machine>","events":[{"event_id":"smoke:1","event_type":"auth_fail","src_ip":"8.8.8.8",
-       "ts":"'"$(date -u +%Y-%m-%dT%H:%M:%S+00:00)"'","count":1,"raw_excerpt":"smoke test"}]}'
-# Expect: {"ok":true,"accepted":1,...}; open the beszel tab in the dashboard to see the room
-```
-
-A fuller post-deploy smoke test (login → machines → ingest → missing-token rejection, one command):
-
-```bash
-tests/smoke.sh http://127.0.0.1:9119 <dashboard-user> <dashboard-password> <a-machine-token>
-```
+Then log into the beszel web UI (`http://127.0.0.1:8090`), generate a **universal token** at `/settings/tokens` (or add a system and copy its public key + token) for the agent side.
 
 ### Agent side (every monitored VPS)
 
-#### 1. Prerequisites
+**One-command install** (copy the public key + token from the centre's beszel web UI):
 
-Three log sources (default paths below; a missing log simply disables that source):
+```bash
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/master/agent/install-agent.sh \
+  | bash -s -- -k "<public key>" -t "<token>" -url "https://<centre-host>" \
+      -center "https://<centre-host>/api/plugins/beszel/security/ingest"
+```
+
+The script handles:
+
+1. beszel agent install (reuses the official script, with a GitHub-raw fallback when Cloudflare blocks `get.beszel.dev`; `--china-mirrors` uses a domestic mirror)
+2. security-collector install (security-event collection), token reuses beszel's (universal or per-system — the centre accepts both)
+3. Writes the systemd unit + enables both services + self-check
+
+**Three log sources** (default paths; a missing log simply disables that source):
 
 | Log | Default path | Provides |
 |---|---|---|
 | fail2ban | `/var/log/fail2ban.log` | ban/unban events |
-| nginx | `/var/log/nginx/access.log` | scan/attack paths (needs your fail2ban nginx jails) |
+| nginx | `/var/log/nginx/access.log` | scan/attack paths (needs fail2ban nginx jails) |
 | sshd | `/var/log/auth.log` | brute-force attempts (with username extraction) |
 
-#### 2. Deploy
-
-```bash
-mkdir -p /opt/beszel-sec-agent
-cp agent/security_collector.py /opt/beszel-sec-agent/
-echo "<beszel universal token (the one in the hub's /settings/tokens)>" > /opt/beszel-sec-agent/agent_token.txt
-chmod 600 /opt/beszel-sec-agent/agent_token.txt
-
-# Optional: operator-owned IPs/ranges (events from these are never recorded as attacks)
-cat > /opt/beszel-sec-agent/trusted-sources.json << 'EOF'
-{"trusted_sources": ["203.0.113.7"]}
-EOF
-
-cp agent/security-collector.service /etc/systemd/system/
-# Edit the unit: point --center-url at your centre (
-#   https://your-centre-host/api/plugins/beszel/security/ingest
-# ) and set SEC_MACHINE_ID / SEC_TRUSTED_SOURCES_FILE as needed
-systemctl daemon-reload && systemctl enable --now security-collector
-```
-
-Key options:
-
-| Option / env | Default | Purpose |
-|---|---|---|
-| `--push` | off | Without it the collector writes a local SQLite DB (single-host mode) |
-| `--center-url` | — | The centre's ingest URL |
-| `--token-file` | — | beszel universal token file (0600); preferred over `--token` |
-| `--flush-interval` | 30 | Push interval (seconds) |
-| `SEC_MACHINE_ID` | hostname | Machine identity; must equal a beszel-registered system name (hostname matches by default) |
-| `SEC_TRUSTED_SOURCES_FILE` | `<repo>../security-trusted-sources.json` | Trusted-sources list path |
-
-#### 3. Verify
+**Verify**:
 
 ```bash
 systemctl status security-collector
-journalctl -u security-collector -f     # expect: [collector] starting, mode=push
+journalctl -u security-collector -f   # expect: [collector] starting, mode=push
 ```
 
 When the centre is unreachable, events land in `security-push-buffer.jsonl` and are re-sent automatically every `--flush-interval` until they stick — no manual intervention after an outage.
 
+### Auth & tokens
+
+Ingest auth reuses beszel's token system — **no separate security-event token to mint**:
+
+- **per-system token** (UUID, generated by "Add System", stored in the `fingerprints` table): bound to one machine; the centre resolves the machine name from the token (strongest spoof protection)
+- **universal token** (generated at `/settings/tokens`, stored in `universal_tokens`): shared by many machines; identity is self-reported + checked against the `systems` table
+
+Both are accepted. To add a machine: "Add System" and copy key+token, or just reuse the universal token (auto-registers).
+
 ### Using the panel
 
 - hermes dashboard → beszel tab: system monitoring (beszel core) + the Security Operations Room
-- Filter syntax: `ip:1.2.3.4`, `type:auth_fail`, `country:NL` — combinable
+- Filter syntax: `ip:1.2.3.4`, `type:auth_fail`, `country:NL` — combinable; Attackers / Active Bans support search, filter, sort, pagination, and click-through IP details
 - Event types: `ban` / `unban` / `scan` / `attack` / `auth_fail` / `auth_success`
 
-## Upstream upgrades
+## Development: build + release
 
-When beszel releases a new version: re-pull upstream → replay `patches/` in order (each `patches/NNN-*.tsx` snapshot is the diff base) → build → refresh `plugin/dashboard/dist/`.
+Normal installs do **not** need a front-end build (prebuilt artifacts are on GitHub Release). Only when developing/changing the front-end:
+
+```bash
+# Prepare beszel front-end source + replay patches
+git clone https://github.com/henrygd/beszel /tmp/beszel
+cd /tmp/beszel/internal/site
+for p in 001 002 003 004 005 006 007 008; do
+  git apply /path/to/hermes-beszel-dashboard/patches/$p-*.patch
+done
+npm install && npm run build
+
+# Release a new version (build dist → package → create GitHub Release)
+scripts/release.sh v0.1.0-beta "release notes"
+```
+
+> Patches target beszel master as of 2026-08. Major upstream releases may need patch adaptations — the `patches/NNN-*.tsx` snapshots are the diff bases.
 
 ## License
 
