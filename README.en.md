@@ -52,7 +52,9 @@ Control host:      beszel hub (PocketBase)   token auth + idempotent UPSERT + Ge
 │   ├── 008-attack-map.tsx      #   full front-end snapshot after 008 (base for the next patch)
 │   ├── 009-install-command.patch  # copy-install-command now exports this project's installer (Linux/brew/freebsd)
 │   ├── 010-machine-selector.patch # machine selector moved from the Attackers card to the top header (global)
-│   └── 010-machine-selector.tsx    # full front-end snapshot after 010 (current base)
+│   ├── 010-machine-selector.tsx    # full front-end snapshot after 010 (base for the next patch)
+│   ├── 011-silent-refresh.patch    # auto-refresh is now a silent update (no scroll jump; fixes stale-filter race)
+│   └── 011-silent-refresh.tsx      # full front-end snapshot after 011 (current base)
 ├── plugin/
 │   ├── manifest.json           # hermes plugin manifest
 │   └── dashboard/
