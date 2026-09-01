@@ -609,7 +609,7 @@ export default function SecurityPage() {
 
 	// Bans list — independent filter/sort/pagination (bans have their own
 	// dimensions: jail/ip/banned_at, no period/country/type aggregation)
-	const [bansFilter, setBansFilter] = useState({ ip: "", jail: "", sort: "recent" })
+	const [bansFilter, setBansFilter] = useState({ ip: "", jail: "", sort: "recent", period: "all", start: "", end: "" })
 	const [bansQuery, setBansQuery] = useState("")
 	const [bansPage, setBansPage] = useState(1)
 	const [bansPageSize, setBansPageSize] = useState(30)
@@ -699,6 +699,9 @@ export default function SecurityPage() {
 		if (bansFilter.ip) p.set("ip", bansFilter.ip)
 		if (bansFilter.jail) p.set("jail", bansFilter.jail)
 		p.set("sort", bansFilter.sort)
+		p.set("period", bansFilter.period)
+		if (bansFilter.start) p.set("start", bansFilter.start)
+		if (bansFilter.end) p.set("end", bansFilter.end)
 		p.set("limit", String(bansPageSize))
 		p.set("offset", String((bansPage - 1) * bansPageSize))
 		if (filter.machine_id) p.set("machine_id", filter.machine_id)
@@ -900,6 +903,37 @@ export default function SecurityPage() {
 							<option value="ip">By IP</option>
 							<option value="jail">By jail</option>
 						</select>
+						<select
+							value={bansFilter.period}
+							onChange={(e) => {
+								setBansFilter((f) => ({ ...f, period: e.target.value, start: "", end: "" }))
+								setBansPage(1)
+							}}
+							className="h-8 rounded-md border bg-background px-2 text-xs"
+						>
+							<option value="all">All time</option>
+							<option value="24h">Last 24h</option>
+							<option value="7d">Last 7d</option>
+							<option value="30d">Last 30d</option>
+							<option value="custom">Custom</option>
+						</select>
+						{bansFilter.period === "custom" && (
+							<>
+								<Input
+									type="datetime-local"
+									value={bansFilter.start}
+									onChange={(e) => setBansFilter((f) => ({ ...f, start: e.target.value }))}
+									className="h-8 text-xs"
+								/>
+								<span className="text-xs text-muted-foreground">to</span>
+								<Input
+									type="datetime-local"
+									value={bansFilter.end}
+									onChange={(e) => setBansFilter((f) => ({ ...f, end: e.target.value }))}
+									className="h-8 text-xs"
+								/>
+							</>
+						)}
 						{(bansFilter.ip || bansFilter.jail) && (
 							<div className="flex items-center gap-1">
 								{bansFilter.ip && (

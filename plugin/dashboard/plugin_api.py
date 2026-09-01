@@ -331,6 +331,9 @@ async def security_bans_current(
     sort: str = "recent",
     limit: int = 30,
     offset: int = 0,
+    period: str = "all",
+    start: str = "",
+    end: str = "",
 ):
     """Currently active bans (unbanned_at IS NULL), filterable and paginated.
 
@@ -341,6 +344,8 @@ async def security_bans_current(
       sort:       recent (last banned) | oldest (first banned) | ip | jail
       limit:      page size (max 500)
       offset:     page offset (0-based)
+      period:     all (default) | 24h | 7d | 30d | custom — filters on banned_at
+      start/end:  ISO datetime (used when period=custom)
     """
     limit = min(max(limit, 1), 500)
     offset = max(offset, 0)
@@ -357,6 +362,21 @@ async def security_bans_current(
         if jail:
             conds.append("jail = ?")
             params.append(jail)
+
+        # Time filter on banned_at (period=custom uses start/end)
+        if period == "custom":
+            if start:
+                conds.append("banned_at >= ?")
+                params.append(start)
+            if end:
+                conds.append("banned_at <= ?")
+                params.append(end)
+        else:
+            hours = {"24h": 24, "7d": 168, "30d": 720}.get(period)
+            if hours:
+                conds.append("banned_at > datetime('now', ?)")
+                params.append(f"-{hours} hours")
+
         where = " AND ".join(conds)
 
         sort_map = {

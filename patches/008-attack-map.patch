@@ -468,7 +468,7 @@
 > 
 > 	// Bans list — independent filter/sort/pagination (bans have their own
 > 	// dimensions: jail/ip/banned_at, no period/country/type aggregation)
-> 	const [bansFilter, setBansFilter] = useState({ ip: "", jail: "", sort: "recent" })
+> 	const [bansFilter, setBansFilter] = useState({ ip: "", jail: "", sort: "recent", period: "all", start: "", end: "" })
 > 	const [bansQuery, setBansQuery] = useState("")
 > 	const [bansPage, setBansPage] = useState(1)
 > 	const [bansPageSize, setBansPageSize] = useState(30)
@@ -554,7 +554,7 @@
 > 				setAttackerTotal(at.total ?? (at.items || []).length)
 174a689
 > 				setMachines(mc.items || [])
-177c692,768
+177c692,771
 < 	}, [])
 ---
 > 	}
@@ -567,6 +567,9 @@
 > 		if (bansFilter.ip) p.set("ip", bansFilter.ip)
 > 		if (bansFilter.jail) p.set("jail", bansFilter.jail)
 > 		p.set("sort", bansFilter.sort)
+> 		p.set("period", bansFilter.period)
+> 		if (bansFilter.start) p.set("start", bansFilter.start)
+> 		if (bansFilter.end) p.set("end", bansFilter.end)
 > 		p.set("limit", String(bansPageSize))
 > 		p.set("offset", String((bansPage - 1) * bansPageSize))
 > 		if (filter.machine_id) p.set("machine_id", filter.machine_id)
@@ -634,9 +637,9 @@
 > 			/>
 > 		)
 > 	}
-180a772
+180a775
 > 			{/* Header */}
-184a777,821
+184a780,824
 > 				<div className="flex items-center gap-4">
 > 					<div className="flex items-center gap-2">
 > 						<Label className="text-xs"><Trans>Refresh</Trans></Label>
@@ -682,57 +685,57 @@
 > 						</div>
 > 					</div>
 > 				</div>
-187c824
+187c827
 < 			{/* stats cards */}
 ---
 > 			{/* Stats cards */}
-191,193c828
+191,193c831
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>Active Bans</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Active Bans</Trans></CardTitle>
-197,199c832
+197,199c835
 < 						<p className="text-xs text-muted-foreground">
 < 							<Trans>Currently banned IPs</Trans>
 < 						</p>
 ---
 > 						<p className="text-xs text-muted-foreground"><Trans>Currently banned IPs</Trans></p>
-204,206c837
+204,206c840
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>24h Events</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Events</Trans></CardTitle>
-215,217c846
+215,217c849
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>Unique IPs</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Unique IPs</Trans></CardTitle>
-221,223c850
+221,223c853
 < 						<p className="text-xs text-muted-foreground">
 < 							<Trans>Distinct source IPs in 24h</Trans>
 < 						</p>
 ---
 > 						<p className="text-xs text-muted-foreground"><Trans>Distinct source IPs</Trans></p>
-228,230c855
+228,230c858
 < 						<CardTitle className="text-sm font-medium">
 < 							<Trans>Event Types</Trans>
 < 						</CardTitle>
 ---
 > 						<CardTitle className="text-sm font-medium"><Trans>Event Types</Trans></CardTitle>
-238c863
+238c866
 < 			{/* current bans */}
 ---
 > 			{/* Attack map */}
-241,243c866
+241,243c869
 < 					<CardTitle>
 < 						<Trans>Active Bans</Trans>
 < 					</CardTitle>
 ---
 > 					<CardTitle><Trans>Attack Map</Trans></CardTitle>
-246,248c869,888
+246,248c872,891
 < 					{bans.length === 0 ? (
 < 						<div className="py-8 text-center text-muted-foreground">
 < 							<Trans>No active bans.</Trans>
@@ -757,7 +760,7 @@
 > 							<Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleBansQuerySubmit}>
 > 								<Trans>Query</Trans>
 > 							</Button>
-249a890,935
+249a893,969
 > 						<select
 > 							value={bansFilter.sort}
 > 							onChange={(e) => {
@@ -771,6 +774,37 @@
 > 							<option value="ip">By IP</option>
 > 							<option value="jail">By jail</option>
 > 						</select>
+> 						<select
+> 							value={bansFilter.period}
+> 							onChange={(e) => {
+> 								setBansFilter((f) => ({ ...f, period: e.target.value, start: "", end: "" }))
+> 								setBansPage(1)
+> 							}}
+> 							className="h-8 rounded-md border bg-background px-2 text-xs"
+> 						>
+> 							<option value="all">All time</option>
+> 							<option value="24h">Last 24h</option>
+> 							<option value="7d">Last 7d</option>
+> 							<option value="30d">Last 30d</option>
+> 							<option value="custom">Custom</option>
+> 						</select>
+> 						{bansFilter.period === "custom" && (
+> 							<>
+> 								<Input
+> 									type="datetime-local"
+> 									value={bansFilter.start}
+> 									onChange={(e) => setBansFilter((f) => ({ ...f, start: e.target.value }))}
+> 									className="h-8 text-xs"
+> 								/>
+> 								<span className="text-xs text-muted-foreground">to</span>
+> 								<Input
+> 									type="datetime-local"
+> 									value={bansFilter.end}
+> 									onChange={(e) => setBansFilter((f) => ({ ...f, end: e.target.value }))}
+> 									className="h-8 text-xs"
+> 								/>
+> 							</>
+> 						)}
 > 						{(bansFilter.ip || bansFilter.jail) && (
 > 							<div className="flex items-center gap-1">
 > 								{bansFilter.ip && (
@@ -804,7 +838,7 @@
 > 				<CardContent>
 > 					{bans.length === 0 ? (
 > 						<div className="py-8 text-center text-muted-foreground"><Trans>No active bans.</Trans></div>
-251,276c937,949
+251,276c971,983
 < 						<Table>
 < 							<TableHeader>
 < 								<TableRow>
@@ -845,7 +879,7 @@
 > 								</div>
 > 							))}
 > 						</div>
-278a952,963
+278a986,997
 > 				{/* Pagination (bottom) */}
 > 				{bans.length > 0 && (
 > 					<div className="border-t">
@@ -858,11 +892,11 @@
 > 						/>
 > 					</div>
 > 				)}
-281c966
+281c1000
 < 			{/* event stream */}
 ---
 > 			{/* Attackers (Level 1) with integrated filter bar */}
-283,286c968,1068
+283,286c1002,1102
 < 				<CardHeader>
 < 					<CardTitle>
 < 						<Trans>Event Stream</Trans>
@@ -969,7 +1003,7 @@
 > 							/>
 > 						</div>
 > 					)}
-290,291c1072,1097
+290,291c1106,1131
 < 						<div className="py-8 text-center text-muted-foreground">
 < 							<Trans>Loading...</Trans>
 ---
@@ -999,7 +1033,7 @@
 > 									</div>
 > 								</div>
 > 							))}
-292a1099,1217
+292a1133,1251
 > 					)}
 > 				</CardContent>
 > 				{/* Pagination (bottom) */}
@@ -1119,13 +1153,13 @@
 > 				<CardContent>
 > 					{loading && events.length === 0 ? (
 > 						<div className="py-8 text-center text-muted-foreground"><Trans>Loading...</Trans></div>
-294,296c1219
+294,296c1253
 < 						<div className="py-8 text-center text-muted-foreground">
 < 							<Trans>No security events recorded.</Trans>
 < 						</div>
 ---
 > 						<div className="py-8 text-center text-muted-foreground"><Trans>No events for this IP.</Trans></div>
-299,312c1222,1253
+299,312c1256,1287
 < 							{events.map((ev) => (
 < 								<div
 < 									key={ev.id}
@@ -1173,7 +1207,7 @@
 > 												) : null
 > 											})}
 > 										</div>
-314,322d1254
+314,322d1288
 < 									{ev.uri && (
 < 										<span className="max-w-[200px] truncate text-muted-foreground">{ev.uri}</span>
 < 									)}
@@ -1183,7 +1217,7 @@
 < 									<span className="ml-auto text-xs text-muted-foreground">
 < 										{timeAgo(ev.ts)}
 < 									</span>
-324a1257,1266
+324a1291,1300
 > 							{hasMore && (
 > 								<Button
 > 									variant="outline"
