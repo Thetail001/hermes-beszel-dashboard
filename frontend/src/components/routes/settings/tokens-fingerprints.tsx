@@ -272,7 +272,7 @@ const ActionsButtonUniversalToken = memo(({ token, checked }: { token: string; c
 		},
 		{
 			text: t({ message: "Homebrew command", context: "Button to copy install command" }),
-			onClick: () => copyLinuxCommand(port, publicKey, token, true),
+			onClick: () => copyLinuxCommand(port, publicKey, token, "brew"),
 			icons: [TuxIcon, AppleIcon],
 		},
 		{
@@ -282,7 +282,7 @@ const ActionsButtonUniversalToken = memo(({ token, checked }: { token: string; c
 		},
 		{
 			text: t({ message: "FreeBSD command", context: "Button to copy install command" }),
-			onClick: () => copyLinuxCommand(port, publicKey, token),
+			onClick: () => copyLinuxCommand(port, publicKey, token, "freebsd"),
 			icons: [FreeBsdIcon],
 		},
 		{

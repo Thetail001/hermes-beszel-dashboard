@@ -47,12 +47,25 @@ export function copyDockerRun(port = "45876", publicKey: string, token: string) 
 	)
 }
 
-export function copyLinuxCommand(port = "45876", publicKey: string, token: string, brew = false) {
+export function copyLinuxCommand(port = "45876", publicKey: string, token: string, variant: "linux" | "brew" | "freebsd" = "linux") {
+	// Linux：本项目命令 —— beszel agent + security-collector 一步装
+	if (variant === "linux") {
+		// security ingest 挂在 hermes 面板同 origin 下（iframe 是相对路径加载，
+		// 所以 window.location.origin 就是 hermes dashboard 的公网地址）
+		const centerUrl = `${window.location.origin}/api/plugins/beszel/security/ingest`
+		let cmd = `curl -fsSL https://raw.githubusercontent.com/Thetail001/hermes-beszel-dashboard/master/agent/install-agent.sh | bash -s -- -p ${port} -k "${publicKey}" -t "${token}" -url "${getHubURL()}" -center "${centerUrl}"`
+		if ((i18n.locale + navigator.language).includes("zh-CN")) {
+			cmd += ` --china-mirrors`
+		}
+		copyToClipboard(cmd)
+		return
+	}
+	// brew / freebsd：官方脚本（security-collector 是 Linux 探针，这些平台只装 beszel agent）
 	let cmd = `curl -sL ${getScriptUrl(
-		brew ? "/brew" : ""
+		variant === "brew" ? "/brew" : ""
 	)} -o /tmp/install-agent.sh && chmod +x /tmp/install-agent.sh && /tmp/install-agent.sh -p ${port} -k "${publicKey}" -t "${token}" -url "${getHubURL()}"`
 	// brew script does not support --china-mirrors
-	if (!brew && (i18n.locale + navigator.language).includes("zh-CN")) {
+	if (variant !== "brew" && (i18n.locale + navigator.language).includes("zh-CN")) {
 		cmd += ` --china-mirrors`
 	}
 	copyToClipboard(cmd)

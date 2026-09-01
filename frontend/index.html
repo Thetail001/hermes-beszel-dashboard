@@ -24,6 +24,12 @@
 		<script>
 			globalThis.BESZEL = "{info}"
 		</script>
+	<script>
+		// [beszel patch] Route PocketBase SDK through the Hermes plugin reverse proxy.
+		// NOTE: overrides the hub template's `globalThis.BESZEL = "{info}"` placeholder
+		// (we serve statically, the hub never runs modifyIndexHTML).
+		globalThis.BESZEL = { BASE_PATH: "/api/plugins/beszel/pb" };
+	</script>
 	</head>
 	<body>
 		<div id="app"></div>

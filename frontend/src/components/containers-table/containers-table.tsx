@@ -257,7 +257,12 @@ const AllContainersTable = memo(function AllContainersTable({
 							<TableRow>
 								<TableCell colSpan={colLength} className="h-37 text-center pointer-events-none">
 									{data ? (
-										<Trans>No results.</Trans>
+										<div className="flex flex-col items-center gap-1 py-4">
+											<Trans>No containers running on this system.</Trans>
+											<span className="text-xs text-muted-foreground">
+												Docker containers will appear here when detected by the agent.
+											</span>
+										</div>
 									) : (
 										<LoaderCircleIcon className="animate-spin size-10 opacity-60 mx-auto" />
 									)}

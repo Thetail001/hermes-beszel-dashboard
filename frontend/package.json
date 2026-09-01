@@ -38,6 +38,7 @@
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
 		"cmdk": "^1.1.1",
+		"d3-geo": "^3.1.1",
 		"d3-time": "^3.1.0",
 		"input-otp": "^1.4.2",
 		"lucide-react": "^0.452.0",
@@ -48,6 +49,7 @@
 		"recharts": "^2.15.4",
 		"shiki": "^3.13.0",
 		"tailwind-merge": "^3.3.1",
+		"topojson-client": "^3.1.0",
 		"valibot": "^1.3.1"
 	},
 	"devDependencies": {
@@ -58,8 +60,10 @@
 		"@tailwindcss/container-queries": "^0.1.1",
 		"@tailwindcss/vite": "^4.1.12",
 		"@types/bun": "^1.2.20",
+		"@types/d3-geo": "^3.1.1",
 		"@types/react": "^19.1.11",
 		"@types/react-dom": "^19.1.7",
+		"@types/topojson-client": "^3.1.5",
 		"@vitejs/plugin-react-swc": "^4.0.1",
 		"tailwindcss": "^4.1.12",
 		"tw-animate-css": "^1.3.7",

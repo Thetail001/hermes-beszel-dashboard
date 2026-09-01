@@ -1,4 +1,18 @@
 import "./index.css"
+// [beszel patch] "History trap": inside the Hermes plugin iframe the
+// session history is shared with the host dashboard SPA. Pushing a sentinel
+// entry and bouncing popstate back forward keeps the browser back button
+// from unmounting the plugin tab (iframe disappears → blank page).
+;(function () {
+	if (!window.parent || window.parent === window) return // not in iframe
+	history.pushState({ sentinel: true }, "", location.href)
+	window.addEventListener("popstate", function () {
+		// user pressed back past our sentinel — bounce forward again
+		if (!history.state || !history.state.sentinel) {
+			history.forward()
+		}
+	})
+})()
 import { i18n } from "@lingui/core"
 import { I18nProvider } from "@lingui/react"
 import { useStore } from "@nanostores/react"
@@ -31,6 +45,7 @@ const Home = lazy(() => import("@/components/routes/home.tsx"))
 const Containers = lazy(() => import("@/components/routes/containers.tsx"))
 const Smart = lazy(() => import("@/components/routes/smart.tsx"))
 const SystemDetail = lazy(() => import("@/components/routes/system.tsx"))
+const Security = lazy(() => import("@/components/routes/security.tsx"))
 const CopyToClipboardDialog = lazy(() => import("@/components/copy-to-clipboard.tsx"))
 
 const App = memo(() => {
@@ -70,7 +85,9 @@ const App = memo(() => {
 	}, [])
 
 	if (!page) {
-		return <h1 className="text-3xl text-center my-14">404</h1>
+		// [beszel patch] Inside the Hermes plugin iframe the pathname never
+		// matches the router's routes — fall back to home instead of 404.
+		return <Home />
 	} else if (page.route === "home") {
 		return <Home />
 	} else if (page.route === "system") {
@@ -81,6 +98,8 @@ const App = memo(() => {
 		return <Smart />
 	} else if (page.route === "settings") {
 		return <Settings />
+	} else if (page.route === "security") {
+		return <Security />
 	}
 })
 
@@ -106,7 +125,9 @@ const Layout = () => {
 						<Navbar />
 					</div>
 					<div className="container relative">
-						<App />
+						<Suspense>
+							<App />
+						</Suspense>
 						{copyContent && (
 							<Suspense>
 								<CopyToClipboardDialog content={copyContent} />
@@ -120,6 +141,24 @@ const Layout = () => {
 }
 
 const I18nApp = () => {
+	useEffect(() => {
+		// [beszel patch] Auto-login: fetch a session token from the Hermes
+		// plugin backend (which holds the real credentials), then load it into
+		// the PocketBase authStore. The beszel login page never renders.
+		if (!pb.authStore.isValid) {
+			fetch("/api/plugins/beszel/auto-auth", { credentials: "include" })
+				.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+				.then(({ token, record }) => {
+					pb.authStore.save(token, record)
+					// authStore.onChange listeners live inside <App>, which is not
+					// mounted yet while the login page shows — flip the atom directly.
+					$authenticated.set(true)
+				})
+				.catch((err) => {
+					console.warn("[beszel] auto-login failed:", err)
+				})
+		}
+	}, [])
 	useEffect(() => {
 		dynamicActivate(getLocale())
 	}, [])

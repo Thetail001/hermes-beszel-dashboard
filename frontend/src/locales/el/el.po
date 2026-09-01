@@ -80,6 +80,10 @@ msgstr "15 λ"
 msgid "24 hours"
 msgstr "24 ώρες"
 
+#: src/components/routes/security.tsx
+#~ msgid "24h Events"
+#~ msgstr ""
+
 #: src/lib/utils.ts
 msgid "30 days"
 msgstr "30 ημέρες"
@@ -107,6 +111,11 @@ msgstr "Ενεργό"
 #: src/components/active-alerts.tsx
 msgid "Active Alerts"
 msgstr "Ενεργές ειδοποιήσεις"
+
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
+msgid "Active Bans"
+msgstr ""
 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Active state"
@@ -187,6 +196,18 @@ msgstr "Είστε βέβαιοι ότι θέλετε να διαγράψετε 
 msgid "Are you sure?"
 msgstr "Είστε βέβαιοι;"
 
+#: src/components/routes/security.tsx
+msgid "Attack Map"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Attackers"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Auto-rotation runs daily at 03:00 UTC."
+msgstr ""
+
 #: src/components/copy-to-clipboard.tsx
 msgid "Automatic copy requires a secure context."
 msgstr "Η αυτόματη αντιγραφή απαιτεί ασφαλές περιβάλλον."
@@ -235,6 +256,10 @@ msgstr "Μέση χρήση του {0}"
 msgid "Average utilization of GPU engines"
 msgstr "Μέση χρήση των μηχανών GPU"
 
+#: src/components/routes/security.tsx
+msgid "Back"
+msgstr ""
+
 #: src/components/command-palette.tsx
 #: src/components/navbar.tsx
 msgid "Backups"
@@ -244,6 +269,10 @@ msgstr "Αντίγραφα ασφαλείας"
 #: src/lib/alerts.ts
 msgid "Bandwidth"
 msgstr "Εύρος ζώνης"
+
+#: src/components/routes/security.tsx
+#~ msgid "Banned"
+#~ msgstr ""
 
 #. Battery label in systems table header
 #: src/components/systems-table/systems-table-columns.tsx
@@ -402,6 +431,10 @@ msgstr "Κάντε κλικ σε ένα σύστημα για να δείτε π
 msgid "Click to copy"
 msgstr "Κάντε κλικ για αντιγραφή"
 
+#: src/components/routes/security.tsx
+msgid "Collapse all"
+msgstr ""
+
 #: src/components/login/forgot-pass-form.tsx
 #: src/components/login/forgot-pass-form.tsx
 msgid "Command line instructions"
@@ -543,13 +576,29 @@ msgstr "Δημιουργήθηκε"
 msgid "Critical (%)"
 msgstr "Κρίσιμο (%)"
 
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative data read since boot"
+msgstr ""
+
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative data written since boot"
+msgstr ""
+
 #: src/components/routes/system/network-sheet.tsx
 msgid "Cumulative Download"
 msgstr "Συνολική λήψη"
 
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative Read"
+msgstr ""
+
 #: src/components/routes/system/network-sheet.tsx
 msgid "Cumulative Upload"
 msgstr "Συνολική αποστολή"
+
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative Write"
+msgstr ""
 
 #. Context: Battery state
 #. Context: Battery state
@@ -557,6 +606,10 @@ msgstr "Συνολική αποστολή"
 #: src/components/routes/system/charts/sensor-charts.tsx
 msgid "Current state"
 msgstr "Τρέχουσα κατάσταση"
+
+#: src/components/routes/security.tsx
+msgid "Currently banned IPs"
+msgstr ""
 
 #. Power Cycles
 #: src/components/routes/system/smart-table.tsx
@@ -611,14 +664,13 @@ msgid "Disk"
 msgstr "Δίσκος"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Disk I/O"
-msgstr "I/O δίσκου"
+#~ msgid "Disk I/O"
+#~ msgstr "I/O δίσκου"
 
 #: src/components/routes/settings/general.tsx
 msgid "Disk unit"
 msgstr "Μονάδα δίσκου"
 
-#: src/components/routes/system/charts/disk-charts.tsx
 #: src/components/routes/system/charts/disk-charts.tsx
 #: src/lib/alerts.ts
 msgid "Disk Usage"
@@ -628,10 +680,22 @@ msgstr "Χρήση δίσκου"
 msgid "Disk usage of {extraFsName}"
 msgstr "Χρήση δίσκου του {extraFsName}"
 
+#: src/components/routes/system/charts/disk-charts.tsx
+msgid "Disk usage of {rootLabel}"
+msgstr ""
+
 #: src/components/routes/system/info-bar.tsx
 msgctxt "Layout display options"
 msgid "Display"
 msgstr "Εμφάνιση"
+
+#: src/components/routes/security.tsx
+msgid "Distinct source IPs"
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Distinct source IPs in 24h"
+#~ msgstr ""
 
 #: src/components/routes/system/charts/cpu-charts.tsx
 msgid "Docker CPU Usage"
@@ -679,6 +743,10 @@ msgstr "Επεξεργασία"
 #: src/components/routes/settings/quiet-hours.tsx
 msgid "Edit {foo}"
 msgstr "Επεξεργασία {foo}"
+
+#: src/components/routes/security.tsx
+msgid "Effects"
+msgstr ""
 
 #: src/components/login/auth-form.tsx
 #: src/components/login/forgot-pass-form.tsx
@@ -737,6 +805,22 @@ msgstr "Προσωρινό"
 msgid "Error"
 msgstr "Σφάλμα"
 
+#: src/components/routes/security.tsx
+#~ msgid "Event Stream"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Event Timeline"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Event Types"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Events"
+msgstr ""
+
 #: src/components/routes/settings/heartbeat.tsx
 msgid "Example:"
 msgstr "Παράδειγμα:"
@@ -759,6 +843,10 @@ msgstr "Τα υπάρχοντα συστήματα που δεν ορίζοντ�
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Exited active"
 msgstr "Ενεργό μετά την έξοδο"
+
+#: src/components/routes/security.tsx
+msgid "Expand all"
+msgstr ""
 
 #: src/components/routes/settings/tokens-fingerprints.tsx
 msgid "Expires after one hour or on hub restart."
@@ -855,6 +943,10 @@ msgstr "Εντολή FreeBSD"
 #: src/lib/i18n.ts
 msgid "Full"
 msgstr "Πλήρες"
+
+#: src/components/routes/security.tsx
+msgid "Fusion"
+msgstr ""
 
 #. Context: General settings
 #: src/components/routes/settings/general.tsx
@@ -962,6 +1054,18 @@ msgstr "Διάστημα"
 msgid "Invalid email address."
 msgstr "Μη έγκυρη διεύθυνση email."
 
+#: src/components/routes/security.tsx
+#~ msgid "IP"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Jail"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Keep days"
+msgstr ""
+
 #: src/components/routes/settings/general.tsx
 msgid "Language"
 msgstr "Γλώσσα"
@@ -1008,6 +1112,8 @@ msgstr "Μέσ. φορτίο"
 msgid "Load state"
 msgstr "Κατάσταση φόρτωσης"
 
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Loading..."
 msgstr "Φόρτωση..."
@@ -1016,6 +1122,10 @@ msgstr "Φόρτωση..."
 #: src/components/navbar.tsx
 msgid "Log Out"
 msgstr "Αποσύνδεση"
+
+#: src/components/routes/security.tsx
+msgid "Log Rotation"
+msgstr ""
 
 #: src/components/login/login.tsx
 msgid "Login"
@@ -1035,6 +1145,10 @@ msgstr "Αρχεία καταγραφής"
 #: src/components/routes/settings/notifications.tsx
 msgid "Looking instead for where to create alerts? Click the bell <0/> icons in the systems table."
 msgstr "Ψάχνετε πού μπορείτε να δημιουργήσετε ειδοποιήσεις; Κάντε κλικ στο καμπανάκι <0/> στον πίνακα συστημάτων."
+
+#: src/components/routes/security.tsx
+msgid "Machine"
+msgstr ""
 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Main PID"
@@ -1120,6 +1234,22 @@ msgstr "Μονάδα δικτύου"
 msgid "No"
 msgstr "Όχι"
 
+#: src/components/routes/security.tsx
+msgid "No active bans."
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "No attackers in this period."
+msgstr ""
+
+#: src/components/containers-table/containers-table.tsx
+msgid "No containers running on this system."
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "No events for this IP."
+msgstr ""
+
 #: src/components/command-palette.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "No results found."
@@ -1127,9 +1257,7 @@ msgstr "Δεν βρέθηκαν αποτελέσματα."
 
 #: src/components/containers-table/containers-table.tsx
 #: src/components/containers-table/containers-table.tsx
-#: src/components/containers-table/containers-table.tsx
 #: src/components/routes/settings/alerts-history-data-table.tsx
-#: src/components/routes/system/smart-table.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "No results."
 msgstr "Κανένα αποτέλεσμα."
@@ -1137,6 +1265,14 @@ msgstr "Κανένα αποτέλεσμα."
 #: src/components/routes/system/smart-table.tsx
 msgid "No S.M.A.R.T. attributes available for this device."
 msgstr "Δεν υπάρχουν διαθέσιμα χαρακτηριστικά S.M.A.R.T. για αυτήν τη συσκευή."
+
+#: src/components/routes/system/smart-table.tsx
+msgid "No S.M.A.R.T. devices configured."
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "No security events recorded."
+#~ msgstr ""
 
 #: src/components/systems-table/systems-table.tsx
 #: src/components/systems-table/systems-table.tsx
@@ -1329,6 +1465,11 @@ msgstr "Δημόσιο κλειδί"
 msgid "Public Key"
 msgstr "Δημόσιο κλειδί"
 
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
+msgid "Query"
+msgstr ""
+
 #: src/components/routes/system/disk-io-sheet.tsx
 msgctxt "Disk I/O average queue depth"
 msgid "Queue Depth"
@@ -1343,6 +1484,7 @@ msgstr "Ώρες σίγασης"
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
+#: src/components/routes/system/disk-io-sheet.tsx
 msgid "Read"
 msgstr "Ανάγνωση"
 
@@ -1352,6 +1494,7 @@ msgstr "Λήφθηκαν"
 
 #: src/components/containers-table/containers-table.tsx
 #: src/components/containers-table/containers-table.tsx
+#: src/components/routes/security.tsx
 #: src/components/routes/system/smart-table.tsx
 msgid "Refresh"
 msgstr "Ανανέωση"
@@ -1398,6 +1541,11 @@ msgstr "Συνέχιση"
 msgctxt "Root disk label"
 msgid "Root"
 msgstr "Ρίζα"
+
+#: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/charts/disk-charts.tsx
+msgid "Root"
+msgstr ""
 
 #: src/components/routes/settings/tokens-fingerprints.tsx
 msgid "Rotate token"
@@ -1459,6 +1607,15 @@ msgstr "Αναζήτηση συστημάτων ή ρυθμίσεων..."
 #: src/components/routes/settings/heartbeat.tsx
 msgid "Seconds between pings (default: 60)"
 msgstr "Δευτερόλεπτα μεταξύ ping (προεπιλογή: 60)"
+
+#: src/components/navbar.tsx
+#: src/components/routes/security.tsx
+msgid "Security"
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Security events in last 24 hours"
+#~ msgstr ""
 
 #: src/components/alerts/alerts-sheet.tsx
 msgid "See <0>notification settings</0> to configure how you receive alerts."
@@ -1668,8 +1825,12 @@ msgid "Throughput of {extraFsName}"
 msgstr "Ρυθμός μεταφοράς του {extraFsName}"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Throughput of root filesystem"
-msgstr "Ρυθμός μεταφοράς του ριζικού συστήματος αρχείων"
+msgid "Throughput of {rootLabel}"
+msgstr ""
+
+#: src/components/routes/system/charts/disk-charts.tsx
+#~ msgid "Throughput of root filesystem"
+#~ msgstr "Ρυθμός μεταφοράς του ριζικού συστήματος αρχείων"
 
 #: src/components/routes/settings/general.tsx
 msgid "Time format"
@@ -1779,6 +1940,10 @@ msgstr "Ενεργοποιείται όταν η χρήση οποιουδήπο
 msgid "Type"
 msgstr "Τύπος"
 
+#: src/components/routes/security.tsx
+msgid "Unique IPs"
+msgstr ""
+
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Unit file"
 msgstr "Αρχείο μονάδας"
@@ -1837,6 +2002,7 @@ msgid "Uptime"
 msgstr "Χρόνος λειτουργίας"
 
 #: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/charts/disk-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
@@ -1845,8 +2011,8 @@ msgid "Usage"
 msgstr "Χρήση"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Usage of root partition"
-msgstr "Χρήση διαμερίσματος root"
+#~ msgid "Usage of root partition"
+#~ msgstr "Χρήση διαμερίσματος root"
 
 #: src/components/routes/system/charts/memory-charts.tsx
 #: src/components/routes/system/charts/memory-charts.tsx
@@ -1925,6 +2091,7 @@ msgstr "Εντολή Windows"
 
 #. Disk write
 #: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx

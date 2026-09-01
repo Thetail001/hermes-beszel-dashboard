@@ -80,6 +80,10 @@ msgstr "15 Min"
 msgid "24 hours"
 msgstr "24 Stunden"
 
+#: src/components/routes/security.tsx
+#~ msgid "24h Events"
+#~ msgstr ""
+
 #: src/lib/utils.ts
 msgid "30 days"
 msgstr "30 Tage"
@@ -107,6 +111,11 @@ msgstr "Aktiv"
 #: src/components/active-alerts.tsx
 msgid "Active Alerts"
 msgstr "Aktive Warnungen"
+
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
+msgid "Active Bans"
+msgstr ""
 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Active state"
@@ -187,6 +196,18 @@ msgstr "Möchtest du {name} wirklich löschen?"
 msgid "Are you sure?"
 msgstr "Bist du sicher?"
 
+#: src/components/routes/security.tsx
+msgid "Attack Map"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Attackers"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Auto-rotation runs daily at 03:00 UTC."
+msgstr ""
+
 #: src/components/copy-to-clipboard.tsx
 msgid "Automatic copy requires a secure context."
 msgstr "Automatisches Kopieren erfordert einen sicheren Kontext."
@@ -235,6 +256,10 @@ msgstr "Durchschnittliche Auslastung von {0}"
 msgid "Average utilization of GPU engines"
 msgstr "Durchschnittliche Auslastung der GPU-Engines"
 
+#: src/components/routes/security.tsx
+msgid "Back"
+msgstr ""
+
 #: src/components/command-palette.tsx
 #: src/components/navbar.tsx
 msgid "Backups"
@@ -244,6 +269,10 @@ msgstr "Backups"
 #: src/lib/alerts.ts
 msgid "Bandwidth"
 msgstr "Bandbreite"
+
+#: src/components/routes/security.tsx
+#~ msgid "Banned"
+#~ msgstr ""
 
 #. Battery label in systems table header
 #: src/components/systems-table/systems-table-columns.tsx
@@ -402,6 +431,10 @@ msgstr "Klicke auf ein System, um weitere Informationen zu sehen."
 msgid "Click to copy"
 msgstr "Zum Kopieren klicken"
 
+#: src/components/routes/security.tsx
+msgid "Collapse all"
+msgstr ""
+
 #: src/components/login/forgot-pass-form.tsx
 #: src/components/login/forgot-pass-form.tsx
 msgid "Command line instructions"
@@ -543,13 +576,29 @@ msgstr "Erstellt"
 msgid "Critical (%)"
 msgstr "Kritisch (%)"
 
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative data read since boot"
+msgstr ""
+
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative data written since boot"
+msgstr ""
+
 #: src/components/routes/system/network-sheet.tsx
 msgid "Cumulative Download"
 msgstr "Kumulativer Download"
 
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative Read"
+msgstr ""
+
 #: src/components/routes/system/network-sheet.tsx
 msgid "Cumulative Upload"
 msgstr "Kumulativer Upload"
+
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative Write"
+msgstr ""
 
 #. Context: Battery state
 #. Context: Battery state
@@ -557,6 +606,10 @@ msgstr "Kumulativer Upload"
 #: src/components/routes/system/charts/sensor-charts.tsx
 msgid "Current state"
 msgstr "Aktueller Zustand"
+
+#: src/components/routes/security.tsx
+msgid "Currently banned IPs"
+msgstr ""
 
 #. Power Cycles
 #: src/components/routes/system/smart-table.tsx
@@ -611,14 +664,13 @@ msgid "Disk"
 msgstr "Festplatte"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Disk I/O"
-msgstr "Festplatten-I/O"
+#~ msgid "Disk I/O"
+#~ msgstr "Festplatten-I/O"
 
 #: src/components/routes/settings/general.tsx
 msgid "Disk unit"
 msgstr "Festplatteneinheit"
 
-#: src/components/routes/system/charts/disk-charts.tsx
 #: src/components/routes/system/charts/disk-charts.tsx
 #: src/lib/alerts.ts
 msgid "Disk Usage"
@@ -628,10 +680,22 @@ msgstr "Festplattennutzung"
 msgid "Disk usage of {extraFsName}"
 msgstr "Festplattennutzung von {extraFsName}"
 
+#: src/components/routes/system/charts/disk-charts.tsx
+msgid "Disk usage of {rootLabel}"
+msgstr ""
+
 #: src/components/routes/system/info-bar.tsx
 msgctxt "Layout display options"
 msgid "Display"
 msgstr "Anzeige"
+
+#: src/components/routes/security.tsx
+msgid "Distinct source IPs"
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Distinct source IPs in 24h"
+#~ msgstr ""
 
 #: src/components/routes/system/charts/cpu-charts.tsx
 msgid "Docker CPU Usage"
@@ -679,6 +743,10 @@ msgstr "Bearbeiten"
 #: src/components/routes/settings/quiet-hours.tsx
 msgid "Edit {foo}"
 msgstr "{foo} bearbeiten"
+
+#: src/components/routes/security.tsx
+msgid "Effects"
+msgstr ""
 
 #: src/components/login/auth-form.tsx
 #: src/components/login/forgot-pass-form.tsx
@@ -737,6 +805,22 @@ msgstr "Flüchtig"
 msgid "Error"
 msgstr "Fehler"
 
+#: src/components/routes/security.tsx
+#~ msgid "Event Stream"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Event Timeline"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Event Types"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Events"
+msgstr ""
+
 #: src/components/routes/settings/heartbeat.tsx
 msgid "Example:"
 msgstr "Beispiel:"
@@ -759,6 +843,10 @@ msgstr "Bestehende Systeme, die nicht in der <0>config.yml</0> definiert sind, w
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Exited active"
 msgstr "Beendet aktiv"
+
+#: src/components/routes/security.tsx
+msgid "Expand all"
+msgstr ""
 
 #: src/components/routes/settings/tokens-fingerprints.tsx
 msgid "Expires after one hour or on hub restart."
@@ -855,6 +943,10 @@ msgstr "FreeBSD Befehl"
 #: src/lib/i18n.ts
 msgid "Full"
 msgstr "Voll"
+
+#: src/components/routes/security.tsx
+msgid "Fusion"
+msgstr ""
 
 #. Context: General settings
 #: src/components/routes/settings/general.tsx
@@ -962,6 +1054,18 @@ msgstr "Intervall"
 msgid "Invalid email address."
 msgstr "Ungültige E-Mail-Adresse."
 
+#: src/components/routes/security.tsx
+#~ msgid "IP"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Jail"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Keep days"
+msgstr ""
+
 #: src/components/routes/settings/general.tsx
 msgid "Language"
 msgstr "Sprache"
@@ -1008,6 +1112,8 @@ msgstr "Systemlast"
 msgid "Load state"
 msgstr "Ladezustand"
 
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Loading..."
 msgstr "Lädt..."
@@ -1016,6 +1122,10 @@ msgstr "Lädt..."
 #: src/components/navbar.tsx
 msgid "Log Out"
 msgstr "Abmelden"
+
+#: src/components/routes/security.tsx
+msgid "Log Rotation"
+msgstr ""
 
 #: src/components/login/login.tsx
 msgid "Login"
@@ -1035,6 +1145,10 @@ msgstr "Protokolle"
 #: src/components/routes/settings/notifications.tsx
 msgid "Looking instead for where to create alerts? Click the bell <0/> icons in the systems table."
 msgstr "Du möchtest neue Warnungen erstellen? Klicke dafür auf die Glocken-<0/>-Symbole in der Systemtabelle."
+
+#: src/components/routes/security.tsx
+msgid "Machine"
+msgstr ""
 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Main PID"
@@ -1120,6 +1234,22 @@ msgstr "Netzwerkeinheit"
 msgid "No"
 msgstr "Nein"
 
+#: src/components/routes/security.tsx
+msgid "No active bans."
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "No attackers in this period."
+msgstr ""
+
+#: src/components/containers-table/containers-table.tsx
+msgid "No containers running on this system."
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "No events for this IP."
+msgstr ""
+
 #: src/components/command-palette.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "No results found."
@@ -1127,9 +1257,7 @@ msgstr "Keine Ergebnisse gefunden."
 
 #: src/components/containers-table/containers-table.tsx
 #: src/components/containers-table/containers-table.tsx
-#: src/components/containers-table/containers-table.tsx
 #: src/components/routes/settings/alerts-history-data-table.tsx
-#: src/components/routes/system/smart-table.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "No results."
 msgstr "Keine Ergebnisse."
@@ -1137,6 +1265,14 @@ msgstr "Keine Ergebnisse."
 #: src/components/routes/system/smart-table.tsx
 msgid "No S.M.A.R.T. attributes available for this device."
 msgstr "Für dieses Gerät sind keine S.M.A.R.T.-Attribute verfügbar."
+
+#: src/components/routes/system/smart-table.tsx
+msgid "No S.M.A.R.T. devices configured."
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "No security events recorded."
+#~ msgstr ""
 
 #: src/components/systems-table/systems-table.tsx
 #: src/components/systems-table/systems-table.tsx
@@ -1329,6 +1465,11 @@ msgstr "Öffentlicher Schlüssel"
 msgid "Public Key"
 msgstr "Öffentlicher Schlüssel"
 
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
+msgid "Query"
+msgstr ""
+
 #: src/components/routes/system/disk-io-sheet.tsx
 msgctxt "Disk I/O average queue depth"
 msgid "Queue Depth"
@@ -1343,6 +1484,7 @@ msgstr "Ruhezeiten"
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
+#: src/components/routes/system/disk-io-sheet.tsx
 msgid "Read"
 msgstr "Lesen"
 
@@ -1352,6 +1494,7 @@ msgstr "Empfangen"
 
 #: src/components/containers-table/containers-table.tsx
 #: src/components/containers-table/containers-table.tsx
+#: src/components/routes/security.tsx
 #: src/components/routes/system/smart-table.tsx
 msgid "Refresh"
 msgstr "Aktualisieren"
@@ -1398,6 +1541,11 @@ msgstr "Fortsetzen"
 msgctxt "Root disk label"
 msgid "Root"
 msgstr "Root"
+
+#: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/charts/disk-charts.tsx
+msgid "Root"
+msgstr ""
 
 #: src/components/routes/settings/tokens-fingerprints.tsx
 msgid "Rotate token"
@@ -1459,6 +1607,15 @@ msgstr "Nach Systemen oder Einstellungen suchen..."
 #: src/components/routes/settings/heartbeat.tsx
 msgid "Seconds between pings (default: 60)"
 msgstr "Sekunden zwischen Pings (Standard: 60)"
+
+#: src/components/navbar.tsx
+#: src/components/routes/security.tsx
+msgid "Security"
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Security events in last 24 hours"
+#~ msgstr ""
 
 #: src/components/alerts/alerts-sheet.tsx
 msgid "See <0>notification settings</0> to configure how you receive alerts."
@@ -1668,8 +1825,12 @@ msgid "Throughput of {extraFsName}"
 msgstr "Durchsatz von {extraFsName}"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Throughput of root filesystem"
-msgstr "Durchsatz des Root-Dateisystems"
+msgid "Throughput of {rootLabel}"
+msgstr ""
+
+#: src/components/routes/system/charts/disk-charts.tsx
+#~ msgid "Throughput of root filesystem"
+#~ msgstr "Durchsatz des Root-Dateisystems"
 
 #: src/components/routes/settings/general.tsx
 msgid "Time format"
@@ -1779,6 +1940,10 @@ msgstr "Löst aus, wenn die Nutzung einer Festplatte einen Schwellenwert übersc
 msgid "Type"
 msgstr "Typ"
 
+#: src/components/routes/security.tsx
+msgid "Unique IPs"
+msgstr ""
+
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Unit file"
 msgstr "Unit-Datei"
@@ -1837,6 +2002,7 @@ msgid "Uptime"
 msgstr "Betriebszeit"
 
 #: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/charts/disk-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
@@ -1845,8 +2011,8 @@ msgid "Usage"
 msgstr "Nutzung"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Usage of root partition"
-msgstr "Nutzung der Root-Partition"
+#~ msgid "Usage of root partition"
+#~ msgstr "Nutzung der Root-Partition"
 
 #: src/components/routes/system/charts/memory-charts.tsx
 #: src/components/routes/system/charts/memory-charts.tsx
@@ -1925,6 +2091,7 @@ msgstr "Windows-Befehl"
 
 #. Disk write
 #: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx

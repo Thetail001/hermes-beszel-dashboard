@@ -4,6 +4,7 @@ const routes = {
 	home: "/",
 	containers: "/containers",
 	smart: "/smart",
+	security: "/security",
 	system: `/system/:id`,
 	settings: `/settings/:name?`,
 	forgot_password: `/forgot-password`,
@@ -35,7 +36,11 @@ export const $router = createRouter(routes, { links: false })
  *  Base path is automatically prepended if serving from subpath
  */
 export const navigate = (urlString: string) => {
-	$router.open(urlString)
+	// [beszel patch] replaceState instead of pushState: inside the Hermes
+	// plugin iframe, pushed entries interleave with the host page's history —
+	// pressing back then leaves the tab entirely (plugin unmounts, iframe
+	// disappears). Replacing keeps the history stack flat.
+	$router.open(urlString, true)
 }
 
 export function Link(props: React.AnchorHTMLAttributes<HTMLAnchorElement>) {

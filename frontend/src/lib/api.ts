@@ -13,15 +13,28 @@ export const isAdmin = () => pb.authStore.record?.role === "admin"
 export const isReadOnlyUser = () => pb.authStore.record?.role === "readonly"
 
 export const verifyAuth = () => {
+	// [beszel patch] Token comes from the Hermes plugin backend's
+	// auto-auth (regular users collection). On refresh failure, re-fetch a
+	// fresh token from the backend instead of logging out — the token can go
+	// stale server-side while still looking valid locally, which blanked the
+	// systems list after a few navigation clicks.
 	pb.collection("users")
 		.authRefresh()
 		.catch(() => {
-			logOut()
-			toast({
-				title: t`Failed to authenticate`,
-				description: t`Please log in again`,
-				variant: "destructive",
-			})
+			fetch("/api/plugins/beszel/auto-auth", { credentials: "include" })
+				.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+				.then(({ token, record }) => {
+					pb.authStore.save(token, record)
+					systemsManager.refresh()
+				})
+				.catch(() => {
+					logOut()
+					toast({
+						title: t`Failed to authenticate`,
+						description: t`Please log in again`,
+						variant: "destructive",
+					})
+				})
 		})
 }
 

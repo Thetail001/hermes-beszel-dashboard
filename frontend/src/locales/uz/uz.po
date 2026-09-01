@@ -75,6 +75,10 @@ msgstr "15 daq"
 msgid "24 hours"
 msgstr "24 soat"
 
+#: src/components/routes/security.tsx
+#~ msgid "24h Events"
+#~ msgstr ""
+
 #: src/lib/utils.ts
 msgid "30 days"
 msgstr "30 kun"
@@ -102,6 +106,11 @@ msgstr "Faol"
 #: src/components/active-alerts.tsx
 msgid "Active Alerts"
 msgstr "Faol ogohlantirishlar"
+
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
+msgid "Active Bans"
+msgstr ""
 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Active state"
@@ -182,6 +191,18 @@ msgstr "{name} ni o'chirishni xohlaysizmi?"
 msgid "Are you sure?"
 msgstr "Ishonchingiz komilmi?"
 
+#: src/components/routes/security.tsx
+msgid "Attack Map"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Attackers"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Auto-rotation runs daily at 03:00 UTC."
+msgstr ""
+
 #: src/components/copy-to-clipboard.tsx
 msgid "Automatic copy requires a secure context."
 msgstr "Avtomatik nusxalash xavfsiz kontekstni talab qiladi."
@@ -230,6 +251,10 @@ msgstr "{0} ning o'rtacha yuklanishi"
 msgid "Average utilization of GPU engines"
 msgstr "GPU dvigatellarining o'rtacha yuklanishi"
 
+#: src/components/routes/security.tsx
+msgid "Back"
+msgstr ""
+
 #: src/components/command-palette.tsx
 #: src/components/navbar.tsx
 msgid "Backups"
@@ -239,6 +264,10 @@ msgstr "Zaxira nusxalar"
 #: src/lib/alerts.ts
 msgid "Bandwidth"
 msgstr "O'tkazish qobiliyati"
+
+#: src/components/routes/security.tsx
+#~ msgid "Banned"
+#~ msgstr ""
 
 #. Battery label in systems table header
 #: src/components/systems-table/systems-table-columns.tsx
@@ -397,6 +426,10 @@ msgstr "Batafsil ma'lumot uchun tizimni bosing."
 msgid "Click to copy"
 msgstr "Nusxalash uchun bosing"
 
+#: src/components/routes/security.tsx
+msgid "Collapse all"
+msgstr ""
+
 #: src/components/login/forgot-pass-form.tsx
 #: src/components/login/forgot-pass-form.tsx
 msgid "Command line instructions"
@@ -538,13 +571,29 @@ msgstr "Yaratilgan"
 msgid "Critical (%)"
 msgstr "Kritik (%)"
 
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative data read since boot"
+msgstr ""
+
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative data written since boot"
+msgstr ""
+
 #: src/components/routes/system/network-sheet.tsx
 msgid "Cumulative Download"
 msgstr "Jami yuklab olish"
 
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative Read"
+msgstr ""
+
 #: src/components/routes/system/network-sheet.tsx
 msgid "Cumulative Upload"
 msgstr "Jami yuklash"
+
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative Write"
+msgstr ""
 
 #. Context: Battery state
 #. Context: Battery state
@@ -552,6 +601,10 @@ msgstr "Jami yuklash"
 #: src/components/routes/system/charts/sensor-charts.tsx
 msgid "Current state"
 msgstr "Joriy holat"
+
+#: src/components/routes/security.tsx
+msgid "Currently banned IPs"
+msgstr ""
 
 #. Power Cycles
 #: src/components/routes/system/smart-table.tsx
@@ -606,14 +659,13 @@ msgid "Disk"
 msgstr "Disk"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Disk I/O"
-msgstr "Disk I/O"
+#~ msgid "Disk I/O"
+#~ msgstr "Disk I/O"
 
 #: src/components/routes/settings/general.tsx
 msgid "Disk unit"
 msgstr "Disk birligi"
 
-#: src/components/routes/system/charts/disk-charts.tsx
 #: src/components/routes/system/charts/disk-charts.tsx
 #: src/lib/alerts.ts
 msgid "Disk Usage"
@@ -623,10 +675,22 @@ msgstr "Disk ishlatilishi"
 msgid "Disk usage of {extraFsName}"
 msgstr "{extraFsName} ning disk ishlatilishi"
 
+#: src/components/routes/system/charts/disk-charts.tsx
+msgid "Disk usage of {rootLabel}"
+msgstr ""
+
 #: src/components/routes/system/info-bar.tsx
 msgctxt "Layout display options"
 msgid "Display"
 msgstr "Ko'rsatish"
+
+#: src/components/routes/security.tsx
+msgid "Distinct source IPs"
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Distinct source IPs in 24h"
+#~ msgstr ""
 
 #: src/components/routes/system/charts/cpu-charts.tsx
 msgid "Docker CPU Usage"
@@ -674,6 +738,10 @@ msgstr "Tahrirlash"
 #: src/components/routes/settings/quiet-hours.tsx
 msgid "Edit {foo}"
 msgstr "{foo} tahrirlash"
+
+#: src/components/routes/security.tsx
+msgid "Effects"
+msgstr ""
 
 #: src/components/login/auth-form.tsx
 #: src/components/login/forgot-pass-form.tsx
@@ -732,6 +800,22 @@ msgstr "Vaqtinchalik"
 msgid "Error"
 msgstr "Xato"
 
+#: src/components/routes/security.tsx
+#~ msgid "Event Stream"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Event Timeline"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Event Types"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Events"
+msgstr ""
+
 #: src/components/routes/settings/heartbeat.tsx
 msgid "Example:"
 msgstr "Misol:"
@@ -754,6 +838,10 @@ msgstr "<0>config.yml</0> da aniqlanmagan mavjud tizimlar o'chiriladi. Iltimos, 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Exited active"
 msgstr "Faollikdan chiqdi"
+
+#: src/components/routes/security.tsx
+msgid "Expand all"
+msgstr ""
 
 #: src/components/routes/settings/tokens-fingerprints.tsx
 msgid "Expires after one hour or on hub restart."
@@ -850,6 +938,10 @@ msgstr "FreeBSD buyrug'i"
 #: src/lib/i18n.ts
 msgid "Full"
 msgstr "To'liq"
+
+#: src/components/routes/security.tsx
+msgid "Fusion"
+msgstr ""
 
 #. Context: General settings
 #: src/components/routes/settings/general.tsx
@@ -957,6 +1049,18 @@ msgstr "Interval"
 msgid "Invalid email address."
 msgstr "Noto'g'ri elektron pochta manzili."
 
+#: src/components/routes/security.tsx
+#~ msgid "IP"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Jail"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Keep days"
+msgstr ""
+
 #: src/components/routes/settings/general.tsx
 msgid "Language"
 msgstr "Til"
@@ -1003,6 +1107,8 @@ msgstr "O'rt. yuklanish"
 msgid "Load state"
 msgstr "Yuklash holati"
 
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Loading..."
 msgstr "Yuklanmoqda..."
@@ -1011,6 +1117,10 @@ msgstr "Yuklanmoqda..."
 #: src/components/navbar.tsx
 msgid "Log Out"
 msgstr "Chiqish"
+
+#: src/components/routes/security.tsx
+msgid "Log Rotation"
+msgstr ""
 
 #: src/components/login/login.tsx
 msgid "Login"
@@ -1030,6 +1140,10 @@ msgstr "Jurnallar"
 #: src/components/routes/settings/notifications.tsx
 msgid "Looking instead for where to create alerts? Click the bell <0/> icons in the systems table."
 msgstr "Ogohlantirishlarni qayerda yaratishni izlayapsizmi? Tizimlar jadvalidagi qo'ng'iroq <0/> ikonkalarini bosing."
+
+#: src/components/routes/security.tsx
+msgid "Machine"
+msgstr ""
 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Main PID"
@@ -1115,6 +1229,22 @@ msgstr "Tarmoq birligi"
 msgid "No"
 msgstr "Yo'q"
 
+#: src/components/routes/security.tsx
+msgid "No active bans."
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "No attackers in this period."
+msgstr ""
+
+#: src/components/containers-table/containers-table.tsx
+msgid "No containers running on this system."
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "No events for this IP."
+msgstr ""
+
 #: src/components/command-palette.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "No results found."
@@ -1122,9 +1252,7 @@ msgstr "Natijalar topilmadi."
 
 #: src/components/containers-table/containers-table.tsx
 #: src/components/containers-table/containers-table.tsx
-#: src/components/containers-table/containers-table.tsx
 #: src/components/routes/settings/alerts-history-data-table.tsx
-#: src/components/routes/system/smart-table.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "No results."
 msgstr "Natijalar yo'q."
@@ -1132,6 +1260,14 @@ msgstr "Natijalar yo'q."
 #: src/components/routes/system/smart-table.tsx
 msgid "No S.M.A.R.T. attributes available for this device."
 msgstr "Ushbu qurilma uchun S.M.A.R.T. atributlari mavjud emas."
+
+#: src/components/routes/system/smart-table.tsx
+msgid "No S.M.A.R.T. devices configured."
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "No security events recorded."
+#~ msgstr ""
 
 #: src/components/systems-table/systems-table.tsx
 #: src/components/systems-table/systems-table.tsx
@@ -1324,6 +1460,11 @@ msgstr ""
 msgid "Public Key"
 msgstr "Ochiq kalit"
 
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
+msgid "Query"
+msgstr ""
+
 #: src/components/routes/system/disk-io-sheet.tsx
 msgctxt "Disk I/O average queue depth"
 msgid "Queue Depth"
@@ -1338,6 +1479,7 @@ msgstr "Tinch soatlar"
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
+#: src/components/routes/system/disk-io-sheet.tsx
 msgid "Read"
 msgstr "O'qish"
 
@@ -1347,6 +1489,7 @@ msgstr "Qabul qilindi"
 
 #: src/components/containers-table/containers-table.tsx
 #: src/components/containers-table/containers-table.tsx
+#: src/components/routes/security.tsx
 #: src/components/routes/system/smart-table.tsx
 msgid "Refresh"
 msgstr "Yangilash"
@@ -1393,6 +1536,11 @@ msgstr "Davom ettirish"
 msgctxt "Root disk label"
 msgid "Root"
 msgstr "Ildiz"
+
+#: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/charts/disk-charts.tsx
+msgid "Root"
+msgstr ""
 
 #: src/components/routes/settings/tokens-fingerprints.tsx
 msgid "Rotate token"
@@ -1454,6 +1602,15 @@ msgstr "Tizimlar yoki sozlamalarni qidiring..."
 #: src/components/routes/settings/heartbeat.tsx
 msgid "Seconds between pings (default: 60)"
 msgstr "Pinglar orasidagi soniyalar (standart: 60)"
+
+#: src/components/navbar.tsx
+#: src/components/routes/security.tsx
+msgid "Security"
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Security events in last 24 hours"
+#~ msgstr ""
 
 #: src/components/alerts/alerts-sheet.tsx
 msgid "See <0>notification settings</0> to configure how you receive alerts."
@@ -1663,8 +1820,12 @@ msgid "Throughput of {extraFsName}"
 msgstr "{extraFsName} ning o'tkazish qobiliyati"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Throughput of root filesystem"
-msgstr "Ildiz fayl tizimining o'tkazish qobiliyati"
+msgid "Throughput of {rootLabel}"
+msgstr ""
+
+#: src/components/routes/system/charts/disk-charts.tsx
+#~ msgid "Throughput of root filesystem"
+#~ msgstr "Ildiz fayl tizimining o'tkazish qobiliyati"
 
 #: src/components/routes/settings/general.tsx
 msgid "Time format"
@@ -1774,6 +1935,10 @@ msgstr "Biron-bir disk ishlatilishi chegaradan oshganda ishga tushadi"
 msgid "Type"
 msgstr "Tur"
 
+#: src/components/routes/security.tsx
+msgid "Unique IPs"
+msgstr ""
+
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Unit file"
 msgstr "Birlik fayl"
@@ -1832,6 +1997,7 @@ msgid "Uptime"
 msgstr "Ishlash vaqti"
 
 #: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/charts/disk-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
@@ -1840,8 +2006,8 @@ msgid "Usage"
 msgstr "Ishlatilishi"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Usage of root partition"
-msgstr "Ildiz bo'limi ishlatilishi"
+#~ msgid "Usage of root partition"
+#~ msgstr "Ildiz bo'limi ishlatilishi"
 
 #: src/components/routes/system/charts/memory-charts.tsx
 #: src/components/routes/system/charts/memory-charts.tsx
@@ -1920,6 +2086,7 @@ msgstr "Windows buyrug'i"
 
 #. Disk write
 #: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx

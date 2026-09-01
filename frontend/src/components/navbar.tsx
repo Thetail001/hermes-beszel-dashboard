@@ -12,6 +12,7 @@ import {
 	SearchIcon,
 	ServerIcon,
 	SettingsIcon,
+	ShieldIcon,
 	UserIcon,
 	UsersIcon,
 } from "lucide-react"
@@ -165,6 +166,20 @@ export default function Navbar() {
 					</TooltipTrigger>
 					<TooltipContent>
 						<Trans>All Containers</Trans>
+					</TooltipContent>
+				</Tooltip>
+				<Tooltip>
+					<TooltipTrigger asChild>
+						<Link
+							href={getPagePath($router, "security")}
+							className={cn(buttonVariants({ variant: "ghost", size: "icon" }))}
+							aria-label="Security"
+						>
+							<ShieldIcon className="h-[1.2rem] w-[1.2rem]" strokeWidth={1.5} />
+						</Link>
+					</TooltipTrigger>
+					<TooltipContent>
+						<Trans>Security</Trans>
 					</TooltipContent>
 				</Tooltip>
 				<Tooltip>

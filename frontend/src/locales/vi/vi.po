@@ -80,6 +80,10 @@ msgstr "15 phút"
 msgid "24 hours"
 msgstr "24 giờ"
 
+#: src/components/routes/security.tsx
+#~ msgid "24h Events"
+#~ msgstr ""
+
 #: src/lib/utils.ts
 msgid "30 days"
 msgstr "30 ngày"
@@ -107,6 +111,11 @@ msgstr "Hoạt động"
 #: src/components/active-alerts.tsx
 msgid "Active Alerts"
 msgstr "Cảnh báo hoạt động"
+
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
+msgid "Active Bans"
+msgstr ""
 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Active state"
@@ -187,6 +196,18 @@ msgstr "Bạn có chắc chắn muốn xóa {name} không?"
 msgid "Are you sure?"
 msgstr "Bạn có chắc không?"
 
+#: src/components/routes/security.tsx
+msgid "Attack Map"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Attackers"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Auto-rotation runs daily at 03:00 UTC."
+msgstr ""
+
 #: src/components/copy-to-clipboard.tsx
 msgid "Automatic copy requires a secure context."
 msgstr "Sao chép tự động yêu cầu một ngữ cảnh an toàn."
@@ -235,6 +256,10 @@ msgstr "Mức sử dụng trung bình của {0}"
 msgid "Average utilization of GPU engines"
 msgstr "Mức sử dụng trung bình của động cơ GPU"
 
+#: src/components/routes/security.tsx
+msgid "Back"
+msgstr ""
+
 #: src/components/command-palette.tsx
 #: src/components/navbar.tsx
 msgid "Backups"
@@ -244,6 +269,10 @@ msgstr "Sao lưu"
 #: src/lib/alerts.ts
 msgid "Bandwidth"
 msgstr "Băng thông"
+
+#: src/components/routes/security.tsx
+#~ msgid "Banned"
+#~ msgstr ""
 
 #. Battery label in systems table header
 #: src/components/systems-table/systems-table-columns.tsx
@@ -402,6 +431,10 @@ msgstr "Nhấp vào hệ thống để xem thêm thông tin."
 msgid "Click to copy"
 msgstr "Nhấp để sao chép"
 
+#: src/components/routes/security.tsx
+msgid "Collapse all"
+msgstr ""
+
 #: src/components/login/forgot-pass-form.tsx
 #: src/components/login/forgot-pass-form.tsx
 msgid "Command line instructions"
@@ -543,13 +576,29 @@ msgstr "Đã tạo"
 msgid "Critical (%)"
 msgstr "Độ nghiêm trọng (%)"
 
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative data read since boot"
+msgstr ""
+
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative data written since boot"
+msgstr ""
+
 #: src/components/routes/system/network-sheet.tsx
 msgid "Cumulative Download"
 msgstr "Tải xuống tích lũy"
 
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative Read"
+msgstr ""
+
 #: src/components/routes/system/network-sheet.tsx
 msgid "Cumulative Upload"
 msgstr "Tải lên tích lũy"
+
+#: src/components/routes/system/disk-io-sheet.tsx
+msgid "Cumulative Write"
+msgstr ""
 
 #. Context: Battery state
 #. Context: Battery state
@@ -557,6 +606,10 @@ msgstr "Tải lên tích lũy"
 #: src/components/routes/system/charts/sensor-charts.tsx
 msgid "Current state"
 msgstr "Trạng thái hiện tại"
+
+#: src/components/routes/security.tsx
+msgid "Currently banned IPs"
+msgstr ""
 
 #. Power Cycles
 #: src/components/routes/system/smart-table.tsx
@@ -611,14 +664,13 @@ msgid "Disk"
 msgstr "Đĩa"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Disk I/O"
-msgstr "Đĩa I/O"
+#~ msgid "Disk I/O"
+#~ msgstr "Đĩa I/O"
 
 #: src/components/routes/settings/general.tsx
 msgid "Disk unit"
 msgstr "Đơn vị đĩa"
 
-#: src/components/routes/system/charts/disk-charts.tsx
 #: src/components/routes/system/charts/disk-charts.tsx
 #: src/lib/alerts.ts
 msgid "Disk Usage"
@@ -628,10 +680,22 @@ msgstr "Sử dụng Đĩa"
 msgid "Disk usage of {extraFsName}"
 msgstr "Sử dụng đĩa của {extraFsName}"
 
+#: src/components/routes/system/charts/disk-charts.tsx
+msgid "Disk usage of {rootLabel}"
+msgstr ""
+
 #: src/components/routes/system/info-bar.tsx
 msgctxt "Layout display options"
 msgid "Display"
 msgstr "Hiển thị"
+
+#: src/components/routes/security.tsx
+msgid "Distinct source IPs"
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Distinct source IPs in 24h"
+#~ msgstr ""
 
 #: src/components/routes/system/charts/cpu-charts.tsx
 msgid "Docker CPU Usage"
@@ -679,6 +743,10 @@ msgstr "Chỉnh sửa"
 #: src/components/routes/settings/quiet-hours.tsx
 msgid "Edit {foo}"
 msgstr "Chỉnh sửa {foo}"
+
+#: src/components/routes/security.tsx
+msgid "Effects"
+msgstr ""
 
 #: src/components/login/auth-form.tsx
 #: src/components/login/forgot-pass-form.tsx
@@ -737,6 +805,22 @@ msgstr "Tạm thời"
 msgid "Error"
 msgstr "Lỗi"
 
+#: src/components/routes/security.tsx
+#~ msgid "Event Stream"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Event Timeline"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Event Types"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Events"
+msgstr ""
+
 #: src/components/routes/settings/heartbeat.tsx
 msgid "Example:"
 msgstr "Ví dụ:"
@@ -759,6 +843,10 @@ msgstr "Các hệ thống hiện có không được định nghĩa trong <0>con
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Exited active"
 msgstr "Đã thoát khi hoạt động"
+
+#: src/components/routes/security.tsx
+msgid "Expand all"
+msgstr ""
 
 #: src/components/routes/settings/tokens-fingerprints.tsx
 msgid "Expires after one hour or on hub restart."
@@ -855,6 +943,10 @@ msgstr "Lệnh FreeBSD"
 #: src/lib/i18n.ts
 msgid "Full"
 msgstr "Đầy pin"
+
+#: src/components/routes/security.tsx
+msgid "Fusion"
+msgstr ""
 
 #. Context: General settings
 #: src/components/routes/settings/general.tsx
@@ -962,6 +1054,18 @@ msgstr "Khoảng thời gian"
 msgid "Invalid email address."
 msgstr "Địa chỉ email không hợp lệ."
 
+#: src/components/routes/security.tsx
+#~ msgid "IP"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Jail"
+#~ msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "Keep days"
+msgstr ""
+
 #: src/components/routes/settings/general.tsx
 msgid "Language"
 msgstr "Ngôn ngữ"
@@ -1008,6 +1112,8 @@ msgstr "Tải TB"
 msgid "Load state"
 msgstr "Trạng thái tải"
 
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Loading..."
 msgstr "Đang tải..."
@@ -1016,6 +1122,10 @@ msgstr "Đang tải..."
 #: src/components/navbar.tsx
 msgid "Log Out"
 msgstr "Đăng xuất"
+
+#: src/components/routes/security.tsx
+msgid "Log Rotation"
+msgstr ""
 
 #: src/components/login/login.tsx
 msgid "Login"
@@ -1035,6 +1145,10 @@ msgstr "Nhật ký"
 #: src/components/routes/settings/notifications.tsx
 msgid "Looking instead for where to create alerts? Click the bell <0/> icons in the systems table."
 msgstr "Thay vào đó, bạn đang tìm nơi để tạo cảnh báo? Nhấp vào biểu tượng chuông <0/> trong bảng hệ thống."
+
+#: src/components/routes/security.tsx
+msgid "Machine"
+msgstr ""
 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Main PID"
@@ -1120,6 +1234,22 @@ msgstr "Đơn vị mạng"
 msgid "No"
 msgstr "Không"
 
+#: src/components/routes/security.tsx
+msgid "No active bans."
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "No attackers in this period."
+msgstr ""
+
+#: src/components/containers-table/containers-table.tsx
+msgid "No containers running on this system."
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "No events for this IP."
+msgstr ""
+
 #: src/components/command-palette.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "No results found."
@@ -1127,9 +1257,7 @@ msgstr "Không tìm thấy kết quả."
 
 #: src/components/containers-table/containers-table.tsx
 #: src/components/containers-table/containers-table.tsx
-#: src/components/containers-table/containers-table.tsx
 #: src/components/routes/settings/alerts-history-data-table.tsx
-#: src/components/routes/system/smart-table.tsx
 #: src/components/systemd-table/systemd-table.tsx
 msgid "No results."
 msgstr "Không có kết quả."
@@ -1137,6 +1265,14 @@ msgstr "Không có kết quả."
 #: src/components/routes/system/smart-table.tsx
 msgid "No S.M.A.R.T. attributes available for this device."
 msgstr "Không có thuộc tính S.M.A.R.T. nào khả dụng cho thiết bị này."
+
+#: src/components/routes/system/smart-table.tsx
+msgid "No S.M.A.R.T. devices configured."
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "No security events recorded."
+#~ msgstr ""
 
 #: src/components/systems-table/systems-table.tsx
 #: src/components/systems-table/systems-table.tsx
@@ -1329,6 +1465,11 @@ msgstr ""
 msgid "Public Key"
 msgstr "Khóa"
 
+#: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
+msgid "Query"
+msgstr ""
+
 #: src/components/routes/system/disk-io-sheet.tsx
 msgctxt "Disk I/O average queue depth"
 msgid "Queue Depth"
@@ -1343,6 +1484,7 @@ msgstr "Giờ yên tĩnh"
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
+#: src/components/routes/system/disk-io-sheet.tsx
 msgid "Read"
 msgstr "Đọc"
 
@@ -1352,6 +1494,7 @@ msgstr "Đã nhận"
 
 #: src/components/containers-table/containers-table.tsx
 #: src/components/containers-table/containers-table.tsx
+#: src/components/routes/security.tsx
 #: src/components/routes/system/smart-table.tsx
 msgid "Refresh"
 msgstr "Làm mới"
@@ -1398,6 +1541,11 @@ msgstr "Tiếp tục"
 msgctxt "Root disk label"
 msgid "Root"
 msgstr "Gốc"
+
+#: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/charts/disk-charts.tsx
+msgid "Root"
+msgstr ""
 
 #: src/components/routes/settings/tokens-fingerprints.tsx
 msgid "Rotate token"
@@ -1459,6 +1607,15 @@ msgstr "Tìm kiếm hệ thống hoặc cài đặt..."
 #: src/components/routes/settings/heartbeat.tsx
 msgid "Seconds between pings (default: 60)"
 msgstr "Số giây giữa các lần ping (mặc định: 60)"
+
+#: src/components/navbar.tsx
+#: src/components/routes/security.tsx
+msgid "Security"
+msgstr ""
+
+#: src/components/routes/security.tsx
+#~ msgid "Security events in last 24 hours"
+#~ msgstr ""
 
 #: src/components/alerts/alerts-sheet.tsx
 msgid "See <0>notification settings</0> to configure how you receive alerts."
@@ -1668,8 +1825,12 @@ msgid "Throughput of {extraFsName}"
 msgstr "Thông lượng của {extraFsName}"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Throughput of root filesystem"
-msgstr "Thông lượng của hệ thống tệp gốc"
+msgid "Throughput of {rootLabel}"
+msgstr ""
+
+#: src/components/routes/system/charts/disk-charts.tsx
+#~ msgid "Throughput of root filesystem"
+#~ msgstr "Thông lượng của hệ thống tệp gốc"
 
 #: src/components/routes/settings/general.tsx
 msgid "Time format"
@@ -1779,6 +1940,10 @@ msgstr "Kích hoạt khi sử dụng bất kỳ đĩa nào vượt quá ngưỡn
 msgid "Type"
 msgstr "Loại"
 
+#: src/components/routes/security.tsx
+msgid "Unique IPs"
+msgstr ""
+
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Unit file"
 msgstr "Tệp đơn vị"
@@ -1837,6 +2002,7 @@ msgid "Uptime"
 msgstr "Thời gian hoạt động"
 
 #: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/charts/disk-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
 #: src/components/routes/system/charts/gpu-charts.tsx
@@ -1845,8 +2011,8 @@ msgid "Usage"
 msgstr "Sử dụng"
 
 #: src/components/routes/system/charts/disk-charts.tsx
-msgid "Usage of root partition"
-msgstr "Sử dụng phân vùng gốc"
+#~ msgid "Usage of root partition"
+#~ msgstr "Sử dụng phân vùng gốc"
 
 #: src/components/routes/system/charts/memory-charts.tsx
 #: src/components/routes/system/charts/memory-charts.tsx
@@ -1925,6 +2091,7 @@ msgstr "Lệnh Windows"
 
 #. Disk write
 #: src/components/routes/system/charts/disk-charts.tsx
+#: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx
 #: src/components/routes/system/disk-io-sheet.tsx

@@ -242,7 +242,7 @@ export const SystemDialog = ({ setOpen, system }: { setOpen: (open: boolean) => 
 									{
 										text: t({ message: "Homebrew command", context: "Button to copy install command" }),
 										onClick: async () =>
-											copyLinuxCommand(isUnixSocket ? hostValue : port.current?.value, publicKey, token, true),
+											copyLinuxCommand(isUnixSocket ? hostValue : port.current?.value, publicKey, token, "brew"),
 										icons: [AppleIcon, TuxIcon],
 									},
 									{
@@ -254,7 +254,7 @@ export const SystemDialog = ({ setOpen, system }: { setOpen: (open: boolean) => 
 									{
 										text: t({ message: "FreeBSD command", context: "Button to copy install command" }),
 										onClick: async () =>
-											copyLinuxCommand(isUnixSocket ? hostValue : port.current?.value, publicKey, token),
+											copyLinuxCommand(isUnixSocket ? hostValue : port.current?.value, publicKey, token, "freebsd"),
 										icons: [FreeBsdIcon],
 									},
 									{
