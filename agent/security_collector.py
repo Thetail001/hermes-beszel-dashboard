@@ -325,7 +325,11 @@ def parse_f2b_line(line: str) -> Optional[dict]:
     if not is_public_ip(m.group("ip")):
         return None
     ts = datetime.strptime(m.group("ts"), "%Y-%m-%d %H:%M:%S")
-    ts = ts.replace(tzinfo=timezone.utc).isoformat()
+    # fail2ban.log timestamps are naive local time; astimezone() first assumes
+    # the system-local timezone, then converts to UTC (unlike replace(), which
+    # would merely label local wall-clock time as UTC and skew events 8h on
+    # non-UTC hosts).
+    ts = ts.astimezone(timezone.utc).isoformat()
     return {
         "ts": ts,
         "event_type": m.group("action").lower(),
