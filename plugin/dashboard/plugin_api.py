@@ -210,9 +210,10 @@ async def auto_auth():
 SEC_DB = Path(os.environ.get(
     "BESZEL_SEC_DB", str(PLUGIN_DATA_DIR / "security-events.db")))
 
-# Max rows the events endpoint returns in a single page. This caps the map's
-# "show latest N" dropdown; tune upward if attack volume grows (configurable
-# in one place rather than scattered literals).
+# Hard cap on events-endpoint page size. This bounds ONLY the map's "show
+# latest N" dropdown — the IP-timeline view uses a fixed small limit and
+# never reaches it. Tune upward if attack volume grows; single configurable
+# spot rather than scattered literals.
 _MAX_EVENTS = 5000
 
 # Authoritative schema — the centre owns this database (agents push over HTTP
