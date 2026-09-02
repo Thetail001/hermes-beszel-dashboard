@@ -35,6 +35,10 @@ interface Ban {
 	machine_id: string
 	banned_at: string
 	unbanned_at: string | null
+	ban_count?: number
+	country?: string | null
+	lat?: number | null
+	lon?: number | null
 }
 
 interface Summary {
@@ -225,28 +229,93 @@ function DensitySparkline({ events }: { events: SecurityEvent[] }) {
 	)
 }
 
-/** Attack Map: Canvas-based world map with attack trajectories */
+/** Attack Map: Interactive Canvas-based world map with pan, zoom, LOD & particle trajectories */
 function AttackMap({
 	events,
+	bans,
 	machines,
 	effectLevel,
 	selectedMachineId,
+	onSelectMachine,
 }: {
 	events: SecurityEvent[]
+	bans: Ban[]
 	machines: Machine[]
 	effectLevel: number
 	selectedMachineId?: string
+	onSelectMachine?: (id: string) => void
 }) {
 	const canvasRef = useRef<HTMLCanvasElement>(null)
 	const containerRef = useRef<HTMLDivElement>(null)
 	const [worldData, setWorldData] = useState<any>(null)
 
-	// Load world topology
+	// Map visual mode: "attackers" or "bans"
+	const [mapMode, setMapMode] = useState<"attackers" | "bans">("attackers")
+
+	// Viewport Pan & Zoom
+	const [zoom, setZoom] = useState(1.0)
+	const [pan, setPan] = useState({ x: 0, y: 0 })
+	const [isDragging, setIsDragging] = useState(false)
+	const dragStartRef = useRef({ x: 0, y: 0, startPanX: 0, startPanY: 0, didMove: false })
+
+	// Tooltip state
+	const [hovered, setHovered] = useState<{
+		type: "machine" | "source"
+		title: string
+		subtitle?: string
+		badge?: string
+		badgeColor?: string
+		details: Array<{ label: string; val: string }>
+		x: number
+		y: number
+	} | null>(null)
+
+	// Load world topology once
 	useEffect(() => {
 		fetch("/dashboard-plugins/beszel/dist/countries-50m.json")
 			.then((r) => r.json())
 			.then((data) => setWorldData(data))
 			.catch(() => setWorldData(null))
+	}, [])
+
+	// Reset zoom & pan
+	const handleReset = () => {
+		setZoom(1.0)
+		setPan({ x: 0, y: 0 })
+	}
+
+	const handleZoomIn = () => {
+		setZoom((z) => Math.min(8.0, Number((z * 1.25).toFixed(2))))
+	}
+
+	const handleZoomOut = () => {
+		setZoom((z) => Math.max(0.8, Number((z * 0.8).toFixed(2))))
+	}
+
+	// Native non-passive wheel listener for smooth cursor-centered zoom
+	useEffect(() => {
+		const container = containerRef.current
+		if (!container) return
+
+		const onWheel = (e: WheelEvent) => {
+			e.preventDefault()
+			const rect = container.getBoundingClientRect()
+			const cx = e.clientX - rect.left
+			const cy = e.clientY - rect.top
+
+			setZoom((curZoom) => {
+				const factor = e.deltaY < 0 ? 1.15 : 0.87
+				const nextZoom = Math.min(8.0, Math.max(0.8, Number((curZoom * factor).toFixed(2))))
+				setPan((curPan) => ({
+					x: cx - (cx - curPan.x) * (nextZoom / curZoom),
+					y: cy - (cy - curPan.y) * (nextZoom / curZoom),
+				}))
+				return nextZoom
+			})
+		}
+
+		container.addEventListener("wheel", onWheel, { passive: false })
+		return () => container.removeEventListener("wheel", onWheel)
 	}, [])
 
 	// Canvas render
@@ -258,7 +327,7 @@ function AttackMap({
 		const ctx = canvas.getContext("2d")
 		if (!ctx) return
 
-		// Resize canvas to container
+		// High DPI canvas buffer
 		const rect = container.getBoundingClientRect()
 		const dpr = window.devicePixelRatio || 1
 		canvas.width = rect.width * dpr
@@ -275,7 +344,7 @@ function AttackMap({
 		const path = geoPath(projection, ctx)
 		const countries = feature(worldData, worldData.objects.countries) as any
 
-		// Machine markers: map both PB ID and machine name -> canvas [x, y]
+		// Machine positions
 		const machinePositions: Record<string, [number, number]> = {}
 		for (const m of machines) {
 			if (m.lat != null && m.lon != null) {
@@ -287,20 +356,68 @@ function AttackMap({
 			}
 		}
 
-		// Fallback target position if an event has an unmapped machine_id
 		const defaultTargetPos: [number, number] =
 			(selectedMachineId && machinePositions[selectedMachineId]) ||
 			(machines[0]?.id && machinePositions[machines[0].id]) ||
 			(machines[0]?.name && machinePositions[machines[0].name]) ||
 			[width / 2, height / 2]
 
-		// Filter attack events with GeoIP
-		const attackEvents = events
-			.filter((ev) => ev.lat != null && ev.lon != null && ev.event_type !== "unban" && ev.event_type !== "auth_success")
-			.slice(0, effectLevel >= 3 ? 50 : 25)
+		// Prepare unified items based on mapMode
+		type MapItem = {
+			id: number | string
+			ip: string
+			country: string | null
+			lat: number
+			lon: number
+			machine_id: string
+			type: string
+			count: number
+			ts: string
+			color: string
+		}
 
-		// Pre-calculate line trajectories
+		let rawItems: MapItem[] = []
+		if (mapMode === "attackers") {
+			rawItems = events
+				.filter((ev) => ev.lat != null && ev.lon != null && ev.event_type !== "unban" && ev.event_type !== "auth_success")
+				.map((ev) => ({
+					id: ev.id,
+					ip: ev.src_ip,
+					country: ev.country,
+					lat: ev.lat!,
+					lon: ev.lon!,
+					machine_id: ev.machine_id,
+					type: ev.event_type,
+					count: ev.count || 1,
+					ts: ev.ts,
+					color: TYPE_COLORS[ev.event_type] || "#3b82f6",
+				}))
+		} else {
+			rawItems = bans
+				.filter((b) => b.lat != null && b.lon != null)
+				.map((b) => ({
+					id: b.id,
+					ip: b.ip,
+					country: b.country || null,
+					lat: b.lat!,
+					lon: b.lon!,
+					machine_id: b.machine_id,
+					type: b.jail,
+					count: b.ban_count || 1,
+					ts: b.banned_at,
+					color: "#ef4444",
+				}))
+		}
+
+		// Density tiering: Level 0 (20), Level 1 (50), Level 2/3 (All)
+		let maxLines = rawItems.length
+		if (effectLevel === 0) maxLines = 20
+		else if (effectLevel === 1) maxLines = 50
+		const visibleItems = rawItems.slice(0, maxLines)
+
+		// Pre-calculate trajectories
 		const lines: Array<{
+			item: MapItem
 			sx: number
 			sy: number
 			tx: number
@@ -310,36 +427,45 @@ function AttackMap({
 			color: string
 			width: number
 			seed: number
+			radius: number
 		}> = []
 
-		for (const ev of attackEvents) {
-			const sourcePos = projection([ev.lon!, ev.lat!])
+		for (const item of visibleItems) {
+			const sourcePos = projection([item.lon, item.lat])
 			if (!sourcePos) continue
 			const [sx, sy] = sourcePos
 
-			const targetPos = (ev.machine_id && machinePositions[ev.machine_id]) || defaultTargetPos
+			const targetPos = (item.machine_id && machinePositions[item.machine_id]) || defaultTargetPos
 			const [tx, ty] = targetPos
 
 			const dist = Math.hypot(tx - sx, ty - sy)
-			// Deterministic pseudo-random factor based on event id and IP string
-			const seed = Math.abs(((ev.id || 1) * 37 + (ev.src_ip ? ev.src_ip.charCodeAt(0) * 19 : 0)) % 100)
-			const curveFactor = seed / 100 - 0.5 // -0.5 to 0.5
+			const seed = Math.abs(((Number(item.id) || 1) * 37 + (item.ip ? item.ip.charCodeAt(0) * 19 : 0)) % 100)
+			const curveFactor = seed / 100 - 0.5
 			const curvature = Math.min(dist * 0.25, 70)
 			const midX = (sx + tx) / 2 + curveFactor * curvature
-			const midY = (sy + ty) / 2 - curvature * 0.6 // arch upward
+			const midY = (sy + ty) / 2 - curvature * 0.6
+
+			// Dot radius with frequency weighting
+			const radius = Math.min(2.5 + Math.log2(item.count + 1) * 0.8, 6.5)
 
 			lines.push({
+				item,
 				sx,
 				sy,
 				tx,
 				ty,
 				midX,
 				midY,
-				color: TYPE_COLORS[ev.event_type] || "#3b82f6",
-				width: effectLevel >= 3 ? 1.5 : 1,
+				color: item.color,
+				width: effectLevel >= 3 ? 1.5 : 1.0,
 				seed,
+				radius,
 			})
 		}
+
+		const hasGrid = effectLevel >= 1
+		const hasPulse = effectLevel >= 2
+		const hasParticles = effectLevel >= 3
 
 		const draw = (time: number) => {
 			ctx.clearRect(0, 0, width, height)
@@ -348,10 +474,15 @@ function AttackMap({
 			ctx.fillStyle = "#0a0a0f"
 			ctx.fillRect(0, 0, width, height)
 
-			// Graticule (subtle grid)
-			if (effectLevel >= 2) {
-				ctx.strokeStyle = "rgba(255,255,255,0.03)"
-				ctx.lineWidth = 0.5
+			// Apply Camera Transform
+			ctx.save()
+			ctx.translate(pan.x, pan.y)
+			ctx.scale(zoom, zoom)
+
+			// Graticule (lat/lon grid)
+			if (hasGrid) {
+				ctx.strokeStyle = "rgba(255,255,255,0.025)"
+				ctx.lineWidth = 0.5 / zoom
 				const graticule = { type: "LineString", coordinates: [] as any[] }
 				for (let lon = -180; lon <= 180; lon += 30) {
 					graticule.coordinates = [
@@ -376,7 +507,7 @@ function AttackMap({
 			// Countries
 			ctx.fillStyle = "rgba(255,255,255,0.04)"
 			ctx.strokeStyle = "rgba(255,255,255,0.08)"
-			ctx.lineWidth = 0.5
+			ctx.lineWidth = 0.5 / zoom
 			for (const c of countries.features) {
 				ctx.beginPath()
 				path(c)
@@ -384,41 +515,71 @@ function AttackMap({
 				ctx.stroke()
 			}
 
-			// Attack trajectories (batch lines)
+			// Trajectory Arcs
 			for (const line of lines) {
 				ctx.strokeStyle = line.color
-				ctx.lineWidth = line.width
-				ctx.globalAlpha = 0.5
+				ctx.lineWidth = Math.max(0.6 / zoom, 0.4) * line.width
+				ctx.globalAlpha = 0.45
 				ctx.beginPath()
 				ctx.moveTo(line.sx, line.sy)
 				ctx.quadraticCurveTo(line.midX, line.midY, line.tx, line.ty)
 				ctx.stroke()
-				ctx.globalAlpha = 1
-
-				// Source dot
-				ctx.fillStyle = line.color
-				ctx.beginPath()
-				ctx.arc(line.sx, line.sy, 2.5, 0, Math.PI * 2)
-				ctx.fill()
+				ctx.globalAlpha = 1.0
 			}
 
-			// Particle heads (Effect level 3: moving photons along bezier curves)
-			if (effectLevel >= 3 && lines.length > 0) {
+			// Photon Particle Stream (Level 3 ONLY)
+			if (hasParticles && lines.length > 0) {
 				for (let i = 0; i < lines.length; i++) {
 					const line = lines[i]
-					const t = (time / 1500 + line.seed / 100) % 1
+					const t = (time / 1600 + line.seed / 100) % 1
 					const invT = 1 - t
 					const px = invT * invT * line.sx + 2 * invT * t * line.midX + t * t * line.tx
 					const py = invT * invT * line.sy + 2 * invT * t * line.midY + t * t * line.ty
 
+					// Glowing head
 					ctx.fillStyle = "#ffffff"
 					ctx.beginPath()
-					ctx.arc(px, py, 2, 0, Math.PI * 2)
+					ctx.arc(px, py, Math.max(1.8 / zoom, 1.0), 0, Math.PI * 2)
 					ctx.fill()
 				}
 			}
 
-			// Machine target markers
+			// Source Attack / Ban Nodes
+			for (const line of lines) {
+				const r = Math.max(line.radius / zoom, 1.5 / zoom)
+
+				// High frequency halo
+				if (line.item.count >= 10 && hasGrid) {
+					ctx.fillStyle = line.color
+					ctx.globalAlpha = 0.2
+					ctx.beginPath()
+					ctx.arc(line.sx, line.sy, r * 2.2, 0, Math.PI * 2)
+					ctx.fill()
+					ctx.globalAlpha = 1.0
+				}
+
+				// Center Dot
+				ctx.fillStyle = line.color
+				ctx.beginPath()
+				ctx.arc(line.sx, line.sy, r, 0, Math.PI * 2)
+				ctx.fill()
+
+				// LOD Level 1 (Zoom >= 1.8): Display Country Code Badge
+				if (zoom >= 1.8 && line.item.country) {
+					ctx.font = `600 ${Math.max(8 / zoom, 5)}px monospace`
+					ctx.fillStyle = "rgba(255,255,255,0.75)"
+					ctx.fillText(line.item.country, line.sx + r + 2 / zoom, line.sy + 2.5 / zoom)
+				}
+
+				// LOD Level 2 (Zoom >= 3.5): Display Masked IP
+				if (zoom >= 3.5) {
+					ctx.font = `${Math.max(7 / zoom, 4.5)}px sans-serif`
+					ctx.fillStyle = "rgba(255,255,255,0.45)"
+					ctx.fillText(line.item.ip, line.sx + r + 2 / zoom, line.sy + 10 / zoom)
+				}
+			}
+
+			// Machine Target Markers
 			for (const m of machines) {
 				if (m.lat != null && m.lon != null) {
 					const pos = projection([m.lon, m.lat])
@@ -429,47 +590,53 @@ function AttackMap({
 					const isAll = !selectedMachineId
 					const isDim = !isAll && !isSelected
 
-					// Glow gradient (active/selected nodes)
-					if (effectLevel >= 2 && !isDim) {
-						const gradient = ctx.createRadialGradient(x, y, 0, x, y, 20)
+					const dotR = (isSelected ? 4.5 : 3.5) / zoom
+
+					// Glow Gradient
+					if (hasPulse && !isDim) {
+						const gradR = 18 / zoom
+						const gradient = ctx.createRadialGradient(x, y, 0, x, y, gradR)
 						gradient.addColorStop(0, isSelected ? "rgba(6,182,212,0.35)" : "rgba(34,197,94,0.3)")
 						gradient.addColorStop(1, "transparent")
 						ctx.fillStyle = gradient
-						ctx.fillRect(x - 20, y - 20, 40, 40)
+						ctx.fillRect(x - gradR, y - gradR, gradR * 2, gradR * 2)
 					}
 
-					// Pulse ring (Level 2+ and active/selected)
-					if (effectLevel >= 2 && !isDim) {
+					// Pulse Ring
+					if (hasPulse && !isDim) {
 						const pulseOffset = (m.id.charCodeAt(0) || 0) * 10
-						const pulse = 7 + Math.sin((time + pulseOffset) / 400) * 2.5
+						const pulse = (7 + Math.sin((time + pulseOffset) / 400) * 2.5) / zoom
 						ctx.strokeStyle = isSelected ? "rgba(6,182,212,0.6)" : "rgba(34,197,94,0.5)"
-						ctx.lineWidth = 1
+						ctx.lineWidth = Math.max(1.0 / zoom, 0.5)
 						ctx.beginPath()
-						ctx.arc(x, y, Math.max(2, pulse), 0, Math.PI * 2)
+						ctx.arc(x, y, Math.max(2 / zoom, pulse), 0, Math.PI * 2)
 						ctx.stroke()
 					}
 
-					// Machine node dot
+					// Node Dot
 					ctx.fillStyle = isSelected ? "#06b6d4" : isDim ? "rgba(34,197,94,0.4)" : "#22c55e"
 					ctx.beginPath()
-					ctx.arc(x, y, isSelected ? 4.5 : 3.5, 0, Math.PI * 2)
+					ctx.arc(x, y, dotR, 0, Math.PI * 2)
 					ctx.fill()
 
-					// Label
+					// Label (with City on LOD 1)
+					const labelText = zoom >= 1.8 && m.city ? `${m.name || m.id} · ${m.city}` : m.name || m.id
 					ctx.fillStyle = isSelected
 						? "rgba(255,255,255,0.95)"
 						: isDim
 						? "rgba(255,255,255,0.3)"
-						: "rgba(255,255,255,0.7)"
-					ctx.font = isSelected ? "bold 11px sans-serif" : "10px sans-serif"
-					ctx.fillText(m.name || m.id, x + 8, y + 4)
+						: "rgba(255,255,255,0.75)"
+					ctx.font = `${isSelected ? "bold " : ""}${Math.max(10 / zoom, 6)}px sans-serif`
+					ctx.fillText(labelText, x + dotR + 3 / zoom, y + 3.5 / zoom)
 				}
 			}
+
+			ctx.restore()
 		}
 
-		// Animation loop if level >= 2, else single frame
+		// Animation frame loop for Level 2/3, else single static draw
 		let animId: number
-		if (effectLevel >= 2) {
+		if (hasPulse || hasParticles) {
 			const renderLoop = (time: number) => {
 				draw(time)
 				animId = requestAnimationFrame(renderLoop)
@@ -482,11 +649,271 @@ function AttackMap({
 		return () => {
 			if (animId) cancelAnimationFrame(animId)
 		}
-	}, [worldData, events, machines, effectLevel, selectedMachineId])
+	}, [worldData, events, bans, machines, effectLevel, selectedMachineId, mapMode, zoom, pan])
+
+	// Mouse down: start dragging
+	const handleMouseDown = (e: React.MouseEvent) => {
+		if (e.button !== 0) return // left click only
+		setIsDragging(true)
+		dragStartRef.current = {
+			x: e.clientX,
+			y: e.clientY,
+			startPanX: pan.x,
+			startPanY: pan.y,
+			didMove: false,
+		}
+	}
+
+	// Mouse move: dragging or hit-test for hover
+	const handleMouseMove = (e: React.MouseEvent) => {
+		if (isDragging) {
+			const dx = e.clientX - dragStartRef.current.x
+			const dy = e.clientY - dragStartRef.current.y
+			if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+				dragStartRef.current.didMove = true
+			}
+			setPan({
+				x: dragStartRef.current.startPanX + dx,
+				y: dragStartRef.current.startPanY + dy,
+			})
+			setHovered(null)
+			return
+		}
+
+		// Hit-test when not dragging
+		const container = containerRef.current
+		if (!container || !worldData) return
+		const rect = container.getBoundingClientRect()
+		const mouseX = e.clientX - rect.left
+		const mouseY = e.clientY - rect.top
+
+		const width = rect.width
+		const height = rect.height
+		const projection = geoEqualEarth().fitSize([width, height], { type: "Sphere" })
+
+		// Check machine markers first
+		for (const m of machines) {
+			if (m.lat != null && m.lon != null) {
+				const pos = projection([m.lon, m.lat])
+				if (!pos) continue
+				const sx = pos[0] * zoom + pan.x
+				const sy = pos[1] * zoom + pan.y
+				if (Math.hypot(mouseX - sx, mouseY - sy) <= 14) {
+					setHovered({
+						type: "machine",
+						title: m.name || m.id,
+						subtitle: [m.city, m.country].filter(Boolean).join(", "),
+						badge: m.status || "up",
+						badgeColor: m.status === "up" ? "bg-emerald-500/20 text-emerald-400 border-emerald-500/30" : "bg-zinc-500/20 text-zinc-400",
+						details: [
+							{ label: "Host", val: m.host || "127.0.0.1" },
+							{ label: "ID", val: m.id },
+						],
+						x: mouseX,
+						y: mouseY,
+					})
+					return
+				}
+			}
+		}
+
+		// Check trajectory source points
+		const items = mapMode === "attackers" ? events : bans
+		for (const item of items) {
+			const lat = (item as any).lat
+			const lon = (item as any).lon
+			if (lat != null && lon != null) {
+				const pos = projection([lon, lat])
+				if (!pos) continue
+				const sx = pos[0] * zoom + pan.x
+				const sy = pos[1] * zoom + pan.y
+				if (Math.hypot(mouseX - sx, mouseY - sy) <= 9) {
+					const isBan = mapMode === "bans"
+					const ip = (item as any).ip || (item as any).src_ip
+					const country = (item as any).country
+					const machineId = item.machine_id
+					const type = (item as any).event_type || (item as any).jail
+					const count = (item as any).count || (item as any).ban_count || 1
+					const ts = (item as any).ts || (item as any).banned_at
+					setHovered({
+						type: "source",
+						title: ip,
+						subtitle: [country, (item as any).city].filter(Boolean).join(" · ") || country || "Unknown Location",
+						badge: isBan ? `Banned: ${type}` : type,
+						badgeColor: isBan ? "bg-red-500/20 text-red-400 border-red-500/30" : "bg-amber-500/20 text-amber-400 border-amber-500/30",
+						details: [
+							{ label: "Target", val: machineId || "All" },
+							{ label: "Hits", val: `× ${count}` },
+							{ label: "Time", val: ts ? new Date(ts).toLocaleTimeString() : "Recent" },
+						],
+						x: mouseX,
+						y: mouseY,
+					})
+					return
+				}
+			}
+		}
+
+		setHovered(null)
+	}
+
+	const handleMouseUp = () => {
+		setIsDragging(false)
+	}
+
+	// Click to focus machine
+	const handleClick = (e: React.MouseEvent) => {
+		if (dragStartRef.current.didMove) return
+		const container = containerRef.current
+		if (!container || !worldData) return
+		const rect = container.getBoundingClientRect()
+		const mouseX = e.clientX - rect.left
+		const mouseY = e.clientY - rect.top
+		const width = rect.width
+		const height = rect.height
+		const projection = geoEqualEarth().fitSize([width, height], { type: "Sphere" })
+
+		for (const m of machines) {
+			if (m.lat != null && m.lon != null) {
+				const pos = projection([m.lon, m.lat])
+				if (!pos) continue
+				const sx = pos[0] * zoom + pan.x
+				const sy = pos[1] * zoom + pan.y
+				if (Math.hypot(mouseX - sx, mouseY - sy) <= 16) {
+					// Center view on this machine with 2.5x zoom
+					const targetZoom = 2.5
+					setZoom(targetZoom)
+					setPan({
+						x: width / 2 - pos[0] * targetZoom,
+						y: height / 2 - pos[1] * targetZoom,
+					})
+					if (onSelectMachine) {
+						onSelectMachine(m.name || m.id)
+					}
+					return
+				}
+			}
+		}
+	}
 
 	return (
-		<div ref={containerRef} className="relative h-[400px] w-full overflow-hidden rounded-md border">
+		<div
+			ref={containerRef}
+			className="relative h-[420px] w-full overflow-hidden rounded-md border select-none cursor-grab active:cursor-grabbing bg-[#0a0a0f]"
+			onMouseDown={handleMouseDown}
+			onMouseMove={handleMouseMove}
+			onMouseUp={handleMouseUp}
+			onMouseLeave={() => {
+				setIsDragging(false)
+				setHovered(null)
+			}}
+			onClick={handleClick}
+		>
 			<canvas ref={canvasRef} className="absolute inset-0" />
+
+			{/* Top Left HUD: Data Source Switch */}
+			<div className="absolute top-3 left-3 flex items-center gap-1.5 rounded-lg border bg-background/80 backdrop-blur px-1.5 py-1 text-xs shadow-md z-10">
+				<button
+					type="button"
+					onClick={(e) => {
+						e.stopPropagation()
+						setMapMode("attackers")
+					}}
+					className={`flex items-center gap-1 rounded px-2 py-0.5 font-medium transition-colors ${
+						mapMode === "attackers"
+							? "bg-primary text-primary-foreground shadow-sm"
+							: "text-muted-foreground hover:text-foreground"
+					}`}
+				>
+					<span>⚔️</span>
+					<Trans>Attackers</Trans>
+					<span className="ml-1 opacity-70 text-[10px]">({events.length})</span>
+				</button>
+				<button
+					type="button"
+					onClick={(e) => {
+						e.stopPropagation()
+						setMapMode("bans")
+					}}
+					className={`flex items-center gap-1 rounded px-2 py-0.5 font-medium transition-colors ${
+						mapMode === "bans"
+							? "bg-destructive text-destructive-foreground shadow-sm"
+							: "text-muted-foreground hover:text-foreground"
+					}`}
+				>
+					<span>🛡️</span>
+					<Trans>Active Bans</Trans>
+					<span className="ml-1 opacity-70 text-[10px]">({bans.length})</span>
+				</button>
+			</div>
+
+			{/* Top Right HUD: Zoom Controls & Scale Indicator */}
+			<div className="absolute top-3 right-3 flex items-center gap-1 rounded-lg border bg-background/80 backdrop-blur px-1.5 py-1 text-xs shadow-md z-10">
+				<button
+					type="button"
+					onClick={(e) => {
+						e.stopPropagation()
+						handleZoomIn()
+					}}
+					title="Zoom In (+)"
+					className="h-6 w-6 rounded flex items-center justify-center font-bold text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+				>
+					+
+				</button>
+				<button
+					type="button"
+					onClick={(e) => {
+						e.stopPropagation()
+						handleReset()
+					}}
+					title="Reset View"
+					className="h-6 px-1.5 rounded flex items-center justify-center font-mono text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+				>
+					{zoom.toFixed(1)}x
+				</button>
+				<button
+					type="button"
+					onClick={(e) => {
+						e.stopPropagation()
+						handleZoomOut()
+					}}
+					title="Zoom Out (-)"
+					className="h-6 w-6 rounded flex items-center justify-center font-bold text-sm text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+				>
+					-
+				</button>
+			</div>
+
+			{/* Floating Tooltip Card */}
+			{hovered && (
+				<div
+					className="absolute pointer-events-none z-20 rounded-lg border bg-card/95 backdrop-blur px-3 py-2 text-xs shadow-xl min-w-[170px]"
+					style={{
+						left: Math.min(hovered.x + 12, (containerRef.current?.clientWidth || 300) - 190),
+						top: Math.min(hovered.y + 12, (containerRef.current?.clientHeight || 300) - 130),
+					}}
+				>
+					<div className="flex items-center justify-between gap-2 border-b pb-1 mb-1.5">
+						<span className="font-semibold text-foreground tracking-tight">{hovered.title}</span>
+						{hovered.badge && (
+							<span className={`text-[10px] px-1.5 py-0.5 rounded border font-mono ${hovered.badgeColor || "bg-muted text-muted-foreground"}`}>
+								{hovered.badge}
+							</span>
+						)}
+					</div>
+					{hovered.subtitle && (
+						<div className="text-[11px] text-muted-foreground mb-1">{hovered.subtitle}</div>
+					)}
+					<div className="space-y-0.5 text-[11px]">
+						{hovered.details.map((d, idx) => (
+							<div key={idx} className="flex justify-between text-muted-foreground">
+								<span>{d.label}:</span>
+								<span className="font-mono text-foreground font-medium">{d.val}</span>
+							</div>
+						))}
+					</div>
+				</div>
+			)}
 		</div>
 	)
 }
@@ -731,7 +1158,7 @@ export default function SecurityPage() {
 		const qs = buildQueryString(filter)
 		const offset = (page - 1) * pageSize
 		Promise.all([
-			fetch(`/api/plugins/beszel/security/events?limit=50&${qs}`).then((r) => r.json()),
+			fetch(`/api/plugins/beszel/security/events?limit=200&${qs}`).then((r) => r.json()),
 			fetch(`/api/plugins/beszel/security/attackers?${qs}&limit=${pageSize}&offset=${offset}`).then((r) => r.json()),
 			fetch(`/api/plugins/beszel/security/stats/summary?${qs}`).then((r) => r.json()),
 			fetch("/api/plugins/beszel/security/machines").then((r) => r.json()),
@@ -960,9 +1387,11 @@ export default function SecurityPage() {
 				<CardContent>
 					<AttackMap
 						events={events}
+						bans={bans}
 						machines={machines}
 						effectLevel={effectLevel}
 						selectedMachineId={filter.machine_id}
+						onSelectMachine={(id) => setFilter((f) => ({ ...f, machine_id: id }))}
 					/>
 				</CardContent>
 			</Card>

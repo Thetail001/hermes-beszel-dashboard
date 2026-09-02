@@ -114,6 +114,7 @@ msgstr "启用的警报"
 
 #: src/components/routes/security.tsx
 #: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
 msgid "Active Bans"
 msgstr ""
 
@@ -200,6 +201,7 @@ msgstr "您确定吗？"
 msgid "Attack Map"
 msgstr ""
 
+#: src/components/routes/security.tsx
 #: src/components/routes/security.tsx
 msgid "Attackers"
 msgstr ""

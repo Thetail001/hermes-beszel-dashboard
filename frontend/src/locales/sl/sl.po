@@ -114,6 +114,7 @@ msgstr "Aktivna opozorila"
 
 #: src/components/routes/security.tsx
 #: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
 msgid "Active Bans"
 msgstr ""
 
@@ -200,6 +201,7 @@ msgstr "Ali ste prepričani?"
 msgid "Attack Map"
 msgstr ""
 
+#: src/components/routes/security.tsx
 #: src/components/routes/security.tsx
 msgid "Attackers"
 msgstr ""

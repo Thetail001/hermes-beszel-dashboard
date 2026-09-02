@@ -114,6 +114,7 @@ msgstr "Aktív riasztások"
 
 #: src/components/routes/security.tsx
 #: src/components/routes/security.tsx
+#: src/components/routes/security.tsx
 msgid "Active Bans"
 msgstr ""
 
@@ -200,6 +201,7 @@ msgstr "Biztos vagy benne?"
 msgid "Attack Map"
 msgstr ""
 
+#: src/components/routes/security.tsx
 #: src/components/routes/security.tsx
 msgid "Attackers"
 msgstr ""

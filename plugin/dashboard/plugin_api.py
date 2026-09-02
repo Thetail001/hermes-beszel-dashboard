@@ -356,48 +356,50 @@ async def security_bans_current(
     offset = max(offset, 0)
     conn = _sec_db()
     try:
-        conds = ["unbanned_at IS NULL"]
+        conds = ["b.unbanned_at IS NULL"]
         params: list = []
         if machine_id:
-            conds.append("machine_id = ?")
+            conds.append("b.machine_id = ?")
             params.append(machine_id)
         if ip:
-            conds.append("ip = ?")
+            conds.append("b.ip = ?")
             params.append(ip)
         if jail:
-            conds.append("jail = ?")
+            conds.append("b.jail = ?")
             params.append(jail)
 
         # Time filter on banned_at (period=custom uses start/end)
         if period == "custom":
             if start:
-                conds.append("banned_at >= ?")
+                conds.append("b.banned_at >= ?")
                 params.append(start)
             if end:
-                conds.append("banned_at <= ?")
+                conds.append("b.banned_at <= ?")
                 params.append(end)
         else:
             hours = {"24h": 24, "7d": 168, "30d": 720}.get(period)
             if hours:
-                conds.append("banned_at > datetime('now', ?)")
+                conds.append("b.banned_at > datetime('now', ?)")
                 params.append(f"-{hours} hours")
 
         where = " AND ".join(conds)
 
         sort_map = {
-            "recent": "banned_at DESC",
-            "oldest": "banned_at ASC",
-            "ip": "ip ASC",
-            "jail": "jail ASC, banned_at DESC",
+            "recent": "b.banned_at DESC",
+            "oldest": "b.banned_at ASC",
+            "ip": "b.ip ASC",
+            "jail": "b.jail ASC, b.banned_at DESC",
         }
-        order = sort_map.get(sort, "banned_at DESC")
+        order = sort_map.get(sort, "b.banned_at DESC")
 
         total = conn.execute(
-            f"SELECT COUNT(*) FROM security_bans WHERE {where}", params
+            f"SELECT COUNT(*) FROM security_bans b WHERE {where}", params
         ).fetchone()[0]
 
         rows = conn.execute(
-            f"SELECT * FROM security_bans WHERE {where} "
+            f"SELECT b.*, g.country, g.lat, g.lon FROM security_bans b "
+            f"LEFT JOIN geo_cache g ON b.ip = g.ip "
+            f"WHERE {where} "
             f"ORDER BY {order} LIMIT ? OFFSET ?",
             params + [limit, offset],
         ).fetchall()
