@@ -411,6 +411,10 @@ msgstr "Verifique o seu serviço de monitorização"
 msgid "Check your notification service"
 msgstr "Verifique seu serviço de notificação"
 
+#: src/components/routes/security.tsx
+msgid "Checked"
+msgstr ""
+
 #: src/components/containers-table/containers-table.tsx
 #: src/components/routes/system/smart-table.tsx
 #: src/components/systems-table/systems-table.tsx
@@ -955,6 +959,10 @@ msgstr "Cheia"
 #: src/components/routes/settings/layout.tsx
 msgid "General"
 msgstr "Geral"
+
+#: src/components/routes/security.tsx
+msgid "GeoIP DB"
+msgstr ""
 
 #: src/components/routes/settings/quiet-hours.tsx
 msgid "Global"

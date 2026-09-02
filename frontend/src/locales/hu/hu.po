@@ -411,6 +411,10 @@ msgstr "Ellenőrizze a megfigyelő szolgáltatást"
 msgid "Check your notification service"
 msgstr "Ellenőrizd az értesítési szolgáltatásodat"
 
+#: src/components/routes/security.tsx
+msgid "Checked"
+msgstr ""
+
 #: src/components/containers-table/containers-table.tsx
 #: src/components/routes/system/smart-table.tsx
 #: src/components/systems-table/systems-table.tsx
@@ -955,6 +959,10 @@ msgstr "Tele"
 #: src/components/routes/settings/layout.tsx
 msgid "General"
 msgstr "Általános"
+
+#: src/components/routes/security.tsx
+msgid "GeoIP DB"
+msgstr ""
 
 #: src/components/routes/settings/quiet-hours.tsx
 msgid "Global"

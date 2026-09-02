@@ -411,6 +411,10 @@ msgstr "Sjekk overvåkingstjenesten din"
 msgid "Check your notification service"
 msgstr "Sjekk din meldingstjeneste"
 
+#: src/components/routes/security.tsx
+msgid "Checked"
+msgstr ""
+
 #: src/components/containers-table/containers-table.tsx
 #: src/components/routes/system/smart-table.tsx
 #: src/components/systems-table/systems-table.tsx
@@ -955,6 +959,10 @@ msgstr "Fullt"
 #: src/components/routes/settings/layout.tsx
 msgid "General"
 msgstr "Generelt"
+
+#: src/components/routes/security.tsx
+msgid "GeoIP DB"
+msgstr ""
 
 #: src/components/routes/settings/quiet-hours.tsx
 msgid "Global"

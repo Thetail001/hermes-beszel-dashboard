@@ -458,6 +458,7 @@ async def security_stats_summary(period: str = "24h", machine_id: str = ""):
             "unique_ips": ips,
             "by_type": by_type,
             "by_jail": by_jail,
+            "geoip": _get_geo_status(),
         }
     finally:
         conn.close()
@@ -880,6 +881,32 @@ except Exception as _e:  # pragma: no cover
 # ---------------------------------------------------------------- geoip (centre-side)
 _geo_reader = None
 _geo_lock = threading.Lock()
+_geo_status = {
+    "database_type": "DBIP-City-Lite",
+    "build_month": None,
+    "build_epoch": None,
+    "last_checked": None,
+    "last_updated": None,
+    "status": "idle",
+    "error": None,
+}
+
+
+def _get_geo_status() -> dict:
+    """Return current GeoIP metadata and updater state."""
+    global _geo_status
+    reader = _geo_reader_get()
+    if reader is not None and _geo_status["build_month"] is None:
+        try:
+            meta = reader.metadata()
+            _geo_status["build_epoch"] = meta.build_epoch
+            _geo_status["build_month"] = datetime.fromtimestamp(
+                meta.build_epoch, timezone.utc
+            ).strftime("%Y-%m")
+            _geo_status["database_type"] = meta.database_type
+        except Exception:
+            pass
+    return dict(_geo_status)
 
 
 def _geo_reader_get():
@@ -887,9 +914,147 @@ def _geo_reader_get():
     if _geo_reader is None and GEOIP_DB.exists():
         with _geo_lock:
             if _geo_reader is None:
+                try:
+                    import maxminddb
+                    _geo_reader = maxminddb.open_database(str(GEOIP_DB))
+                    meta = _geo_reader.metadata()
+                    _geo_status["build_epoch"] = meta.build_epoch
+                    _geo_status["build_month"] = datetime.fromtimestamp(
+                        meta.build_epoch, timezone.utc
+                    ).strftime("%Y-%m")
+                    _geo_status["database_type"] = meta.database_type
+                    _geo_status["status"] = "ok"
+                except Exception as e:
+                    _geo_status["status"] = "error"
+                    _geo_status["error"] = str(e)
+    return _geo_reader
+
+
+def _reload_geo_reader():
+    """Hot-reload the maxminddb reader after file update."""
+    global _geo_reader
+    with _geo_lock:
+        if _geo_reader is not None:
+            try:
+                _geo_reader.close()
+            except Exception:
+                pass
+            _geo_reader = None
+        if GEOIP_DB.exists():
+            try:
                 import maxminddb
                 _geo_reader = maxminddb.open_database(str(GEOIP_DB))
-    return _geo_reader
+                meta = _geo_reader.metadata()
+                _geo_status["build_epoch"] = meta.build_epoch
+                _geo_status["build_month"] = datetime.fromtimestamp(
+                    meta.build_epoch, timezone.utc
+                ).strftime("%Y-%m")
+                _geo_status["database_type"] = meta.database_type
+                _geo_status["status"] = "ok"
+                _geo_status["error"] = None
+            except Exception as e:
+                _geo_status["status"] = "error"
+                _geo_status["error"] = str(e)
+
+
+def _update_geoip_db() -> bool:
+    """Check db-ip.com for current month build; download, validate and hot-reload.
+
+    Safe:
+      - Atomic write via .tmp file then os.replace
+      - Validated with maxminddb open + sample lookup before replacement
+      - Backup kept at .mmdb.bak
+      - On any error, existing database remains active and untouched
+    """
+    import gzip
+    import shutil
+    import urllib.request
+    import logging
+
+    logger = logging.getLogger("beszel.geoip")
+    now = datetime.now(timezone.utc)
+    cur_month = now.strftime("%Y-%m")
+    _geo_status["last_checked"] = now.isoformat()
+
+    # Determine current build month
+    reader = _geo_reader_get()
+    build_month = _geo_status.get("build_month")
+    if build_month is None and reader is not None:
+        try:
+            be = reader.metadata().build_epoch
+            build_month = datetime.fromtimestamp(be, timezone.utc).strftime("%Y-%m")
+            _geo_status["build_month"] = build_month
+        except Exception:
+            pass
+
+    if build_month is not None and build_month >= cur_month:
+        _geo_status["status"] = "ok"
+        return False
+
+    url = f"https://download.db-ip.com/free/dbip-city-lite-{cur_month}.mmdb.gz"
+    gz_path = GEOIP_DB.with_suffix(".mmdb.gz.tmp")
+    tmp_path = GEOIP_DB.with_suffix(".mmdb.tmp")
+    _geo_status["status"] = "updating"
+
+    try:
+        GEOIP_DB.parent.mkdir(parents=True, exist_ok=True)
+        req = urllib.request.Request(url, headers={"User-Agent": "hermes-beszel-geoip-updater"})
+        with urllib.request.urlopen(req, timeout=180) as resp, open(gz_path, "wb") as f:
+            shutil.copyfileobj(resp, f)
+
+        with gzip.open(gz_path, "rb") as fi, open(tmp_path, "wb") as fo:
+            shutil.copyfileobj(fi, fo)
+
+        # Validate downloaded database
+        import maxminddb
+        test_reader = maxminddb.open_database(str(tmp_path))
+        meta = test_reader.metadata()
+        new_month = datetime.fromtimestamp(meta.build_epoch, timezone.utc).strftime("%Y-%m")
+        test_reader.get("8.8.8.8")
+        test_reader.close()
+
+        if new_month < cur_month:
+            logger.info("GeoIP downloaded build %s is older than current month %s, skip", new_month, cur_month)
+            tmp_path.unlink(missing_ok=True)
+            _geo_status["status"] = "ok"
+            return False
+
+        # Backup old DB and atomic replace
+        if GEOIP_DB.exists():
+            shutil.copy2(GEOIP_DB, GEOIP_DB.with_suffix(".mmdb.bak"))
+        os.replace(tmp_path, GEOIP_DB)
+
+        # Hot-reload in-memory reader
+        _reload_geo_reader()
+        _geo_status["last_updated"] = datetime.now(timezone.utc).isoformat()
+        _geo_status["status"] = "ok"
+        _geo_status["error"] = None
+        logger.info("GeoIP database successfully updated to %s", new_month)
+        return True
+    except Exception as e:
+        logger.warning("GeoIP auto-update failed: %s", e)
+        _geo_status["status"] = "error"
+        _geo_status["error"] = str(e)
+        tmp_path.unlink(missing_ok=True)
+        return False
+    finally:
+        gz_path.unlink(missing_ok=True)
+
+
+def _geoip_updater_loop():
+    """Background worker: runs 30s after startup, then every 24 hours."""
+    time.sleep(30)
+    while True:
+        try:
+            _update_geoip_db()
+        except Exception:
+            pass
+        time.sleep(24 * 3600)
+
+
+# Start background auto-updater thread
+_updater_thread = threading.Thread(target=_geoip_updater_loop, name="geoip-updater", daemon=True)
+_updater_thread.start()
 
 
 def _geoip_lookup(conn: sqlite3.Connection, ip: str):

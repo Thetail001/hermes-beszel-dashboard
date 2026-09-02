@@ -50,6 +50,15 @@ interface Summary {
 	unique_ips: number
 	by_type: Record<string, number>
 	by_jail: Record<string, number>
+	geoip?: {
+		database_type?: string
+		build_month?: string
+		build_epoch?: number
+		last_checked?: string
+		last_updated?: string
+		status?: string
+		error?: string
+	}
 }
 
 interface Machine {
@@ -1515,8 +1524,29 @@ export default function SecurityPage() {
 
 			{/* Attack map */}
 			<Card>
-				<CardHeader>
+				<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
 					<CardTitle><Trans>Attack Map</Trans></CardTitle>
+					{summary?.geoip && (
+						<div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 px-2.5 py-1 rounded-md border">
+							<span
+								className={`inline-block h-2 w-2 rounded-full ${
+									summary.geoip.status === "updating"
+										? "bg-amber-400 animate-pulse"
+										: summary.geoip.status === "error"
+										? "bg-red-500"
+										: "bg-emerald-500"
+								}`}
+							/>
+							<span>
+								<Trans>GeoIP DB</Trans>: {summary.geoip.database_type || "DB-IP City"} ({summary.geoip.build_month || "Auto"})
+							</span>
+							{summary.geoip.last_checked && (
+								<span className="hidden sm:inline text-muted-foreground/60">
+									· <Trans>Checked</Trans> {summary.geoip.last_checked.slice(0, 10)}
+								</span>
+							)}
+						</div>
+					)}
 				</CardHeader>
 				<CardContent>
 					<AttackMap
