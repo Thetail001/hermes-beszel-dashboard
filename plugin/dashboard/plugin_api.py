@@ -226,7 +226,9 @@ CREATE TABLE IF NOT EXISTS security_events (
     ua TEXT,
     username TEXT,
     country TEXT,
+    city TEXT,
     asn TEXT,
+    org TEXT,
     lat REAL,
     lon REAL,
     raw_excerpt TEXT,
@@ -258,6 +260,7 @@ CREATE INDEX IF NOT EXISTS idx_bans_ip ON security_bans(ip);
 CREATE TABLE IF NOT EXISTS geo_cache (
     ip TEXT PRIMARY KEY,
     country TEXT,
+    city TEXT,
     asn TEXT,
     org TEXT,
     lat REAL,
@@ -274,6 +277,20 @@ def _sec_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(SEC_DB))
     conn.row_factory = sqlite3.Row
     conn.executescript(_SEC_SCHEMA)
+    try:
+        cols_sec = [r[1] for r in conn.execute("PRAGMA table_info(security_events)").fetchall()]
+        if "city" not in cols_sec:
+            conn.execute("ALTER TABLE security_events ADD COLUMN city TEXT")
+        if "org" not in cols_sec:
+            conn.execute("ALTER TABLE security_events ADD COLUMN org TEXT")
+        cols_geo = [r[1] for r in conn.execute("PRAGMA table_info(geo_cache)").fetchall()]
+        if "city" not in cols_geo:
+            conn.execute("ALTER TABLE geo_cache ADD COLUMN city TEXT")
+        if "org" not in cols_geo:
+            conn.execute("ALTER TABLE geo_cache ADD COLUMN org TEXT")
+        conn.commit()
+    except Exception:
+        pass
     return conn
 
 
@@ -297,24 +314,33 @@ async def security_events(
       machine_id: filter by machine (empty = all machines)
     """
     limit = min(limit, 200)
-    sql = "SELECT * FROM security_events WHERE 1=1"
+    sql = """
+        SELECT
+            e.*,
+            COALESCE(e.city, g.city) as city,
+            COALESCE(e.asn, g.asn) as asn,
+            COALESCE(e.org, g.org) as org
+        FROM security_events e
+        LEFT JOIN geo_cache g ON e.src_ip = g.ip
+        WHERE 1=1
+    """
     params: list = []
     if before:
-        sql += " AND ts < ?"
+        sql += " AND e.ts < ?"
         params.append(before)
     if jail:
-        sql += " AND jail = ?"
+        sql += " AND e.jail = ?"
         params.append(jail)
     if ip:
-        sql += " AND src_ip = ?"
+        sql += " AND e.src_ip = ?"
         params.append(ip)
     if type:
-        sql += " AND event_type = ?"
+        sql += " AND e.event_type = ?"
         params.append(type)
     if machine_id:
-        sql += " AND machine_id = ?"
+        sql += " AND e.machine_id = ?"
         params.append(machine_id)
-    sql += " ORDER BY ts DESC LIMIT ?"
+    sql += " ORDER BY e.ts DESC LIMIT ?"
     params.append(limit)
 
     conn = _sec_db()
@@ -397,7 +423,7 @@ async def security_bans_current(
         ).fetchone()[0]
 
         rows = conn.execute(
-            f"SELECT b.*, g.country, g.asn as city, g.lat, g.lon FROM security_bans b "
+            f"SELECT b.*, g.country, g.city, g.asn, g.org, g.lat, g.lon FROM security_bans b "
             f"LEFT JOIN geo_cache g ON b.ip = g.ip "
             f"WHERE {where} "
             f"ORDER BY {order} LIMIT ? OFFSET ?",
@@ -471,6 +497,8 @@ async def security_attackers(
     end: str = "",
     type: str = "",
     country: str = "",
+    asn: str = "",
+    org: str = "",
     ip: str = "",
     sort: str = "recent",
     limit: int = 30,
@@ -485,6 +513,8 @@ async def security_attackers(
       end:       ISO datetime (overrides period)
       type:      filter by event_type
       country:   filter by country code
+      asn:       filter by ASN (e.g. 14061 or AS14061)
+      org:       filter by Organization / ISP name
       ip:        filter by source IP
       sort:      recent (last activity) | count (most events) | newest (first seen)
       limit:     page size (max 500)
@@ -497,26 +527,32 @@ async def security_attackers(
     try:
         # Build time filter
         if start and end:
-            time_cond = "ts >= ? AND ts <= ?"
+            time_cond = "e.ts >= ? AND e.ts <= ?"
             params = [start, end]
         else:
             hours = {"24h": 24, "7d": 168, "30d": 720}.get(period, 168)
-            time_cond = "ts > datetime('now', ?)"
+            time_cond = "e.ts > datetime('now', ?)"
             params = [f"-{hours} hours"]
 
         # Additional filters
         filters = ""
         if type:
-            filters += " AND event_type = ?"
+            filters += " AND e.event_type = ?"
             params.append(type)
         if country:
-            filters += " AND country = ?"
-            params.append(country)
+            filters += " AND (e.country = ? OR g.country = ?)"
+            params.extend([country, country])
+        if asn:
+            filters += " AND (e.asn LIKE ? OR g.asn LIKE ?)"
+            params.extend([f"%{asn}%", f"%{asn}%"])
+        if org:
+            filters += " AND (e.org LIKE ? OR g.org LIKE ?)"
+            params.extend([f"%{org}%", f"%{org}%"])
         if ip:
-            filters += " AND src_ip = ?"
+            filters += " AND e.src_ip = ?"
             params.append(ip)
         if machine_id:
-            filters += " AND machine_id = ?"
+            filters += " AND e.machine_id = ?"
             params.append(machine_id)
 
         # Sort mapping (labels on the front-end must mirror these semantics)
@@ -529,24 +565,29 @@ async def security_attackers(
 
         # Total matches (for pagination) — same WHERE, aggregated distinct IPs
         total = conn.execute(
-            f"SELECT COUNT(DISTINCT src_ip) FROM security_events "
+            f"SELECT COUNT(DISTINCT e.src_ip) FROM security_events e "
+            f"LEFT JOIN geo_cache g ON e.src_ip = g.ip "
             f"WHERE {time_cond} {filters}",
             params,
         ).fetchone()[0]
 
         sql = f"""
             SELECT
-                src_ip,
-                country,
-                lat,
-                lon,
+                e.src_ip,
+                COALESCE(e.country, g.country) as country,
+                COALESCE(e.city, g.city) as city,
+                COALESCE(e.asn, g.asn) as asn,
+                COALESCE(e.org, g.org) as org,
+                COALESCE(e.lat, g.lat) as lat,
+                COALESCE(e.lon, g.lon) as lon,
                 COUNT(*) as total_events,
-                MAX(ts) as last_seen,
-                MIN(ts) as first_seen,
-                GROUP_CONCAT(DISTINCT event_type) as types
-            FROM security_events
+                MAX(e.ts) as last_seen,
+                MIN(e.ts) as first_seen,
+                GROUP_CONCAT(DISTINCT e.event_type) as types
+            FROM security_events e
+            LEFT JOIN geo_cache g ON e.src_ip = g.ip
             WHERE {time_cond} {filters}
-            GROUP BY src_ip
+            GROUP BY e.src_ip
             ORDER BY {order}
             LIMIT ? OFFSET ?
         """
@@ -681,6 +722,9 @@ async def security_ip_profile(ip: str):
             "SELECT * FROM geo_cache WHERE ip = ?",
             (ip,),
         ).fetchone()
+        if not geo or not geo["country"] or not geo["asn"]:
+            _geoip_lookup(conn, ip)
+            geo = conn.execute("SELECT * FROM geo_cache WHERE ip = ?", (ip,)).fetchone()
         return {
             "ip": ip,
             "events": [dict(r) for r in events],
@@ -700,9 +744,11 @@ async def security_ip_profile(ip: str):
 # derives machine_id from the verified principal — NEVER trusting the client's
 # self-reported machine_id — geo-enriches, and UPSERTs by event_id (idempotent).
 
-SECURITY_TOKENS_FILE = None  # deprecated — ingest now uses beszel's universal token
-GEOIP_DB = Path(os.environ.get(
+GEOIP_CITY_DB = Path(os.environ.get(
     "BESZEL_GEOIP_DB", str(PLUGIN_DATA_DIR / "dbip-city-lite.mmdb")))
+GEOIP_ASN_DB = Path(os.environ.get(
+    "BESZEL_GEOIP_ASN_DB", str(PLUGIN_DATA_DIR / "dbip-asn-lite.mmdb")))
+GEOIP_DB = GEOIP_CITY_DB  # backward compatibility alias
 
 # event types an agent may legitimately report
 _VALID_EVENT_TYPES = {"ban", "unban", "attack", "scan", "auth_fail", "auth_success"}
@@ -878,126 +924,123 @@ except Exception as _e:  # pragma: no cover
     logging.getLogger(__name__).warning("security ingest token-auth registration failed: %s", _e)
 
 
-# ---------------------------------------------------------------- geoip (centre-side)
-_geo_reader = None
+# ---------------------------------------------------------------- geoip & asn (centre-side)
+_geo_city_reader = None
+_geo_asn_reader = None
 _geo_lock = threading.Lock()
 _geo_status = {
-    "database_type": "DBIP-City-Lite",
-    "build_month": None,
-    "build_epoch": None,
+    "city": {"type": "DBIP-City-Lite", "build_month": None, "build_epoch": None, "status": "idle"},
+    "asn": {"type": "DBIP-ASN-Lite", "build_month": None, "build_epoch": None, "status": "idle"},
     "last_checked": None,
     "last_updated": None,
-    "status": "idle",
+    "status": "ok",
     "error": None,
 }
 
 
 def _get_geo_status() -> dict:
-    """Return current GeoIP metadata and updater state."""
+    """Return current GeoIP + ASN metadata and updater state."""
     global _geo_status
-    reader = _geo_reader_get()
-    if reader is not None and _geo_status["build_month"] is None:
+    city_reader = _geo_city_reader_get()
+    if city_reader is not None and _geo_status["city"]["build_month"] is None:
         try:
-            meta = reader.metadata()
-            _geo_status["build_epoch"] = meta.build_epoch
-            _geo_status["build_month"] = datetime.fromtimestamp(
+            meta = city_reader.metadata()
+            _geo_status["city"]["build_epoch"] = meta.build_epoch
+            _geo_status["city"]["build_month"] = datetime.fromtimestamp(
                 meta.build_epoch, timezone.utc
             ).strftime("%Y-%m")
-            _geo_status["database_type"] = meta.database_type
         except Exception:
             pass
-    return dict(_geo_status)
+    asn_reader = _geo_asn_reader_get()
+    if asn_reader is not None and _geo_status["asn"]["build_month"] is None:
+        try:
+            meta = asn_reader.metadata()
+            _geo_status["asn"]["build_epoch"] = meta.build_epoch
+            _geo_status["asn"]["build_month"] = datetime.fromtimestamp(
+                meta.build_epoch, timezone.utc
+            ).strftime("%Y-%m")
+        except Exception:
+            pass
+    res = dict(_geo_status)
+    res["database_type"] = "DBIP City + ASN"
+    res["build_month"] = _geo_status["city"].get("build_month") or _geo_status["asn"].get("build_month")
+    return res
 
 
-def _geo_reader_get():
-    global _geo_reader
-    if _geo_reader is None and GEOIP_DB.exists():
+def _geo_city_reader_get():
+    global _geo_city_reader
+    if _geo_city_reader is None and GEOIP_CITY_DB.exists():
         with _geo_lock:
-            if _geo_reader is None:
+            if _geo_city_reader is None:
                 try:
                     import maxminddb
-                    _geo_reader = maxminddb.open_database(str(GEOIP_DB))
-                    meta = _geo_reader.metadata()
-                    _geo_status["build_epoch"] = meta.build_epoch
-                    _geo_status["build_month"] = datetime.fromtimestamp(
+                    _geo_city_reader = maxminddb.open_database(str(GEOIP_CITY_DB))
+                    meta = _geo_city_reader.metadata()
+                    _geo_status["city"]["build_epoch"] = meta.build_epoch
+                    _geo_status["city"]["build_month"] = datetime.fromtimestamp(
                         meta.build_epoch, timezone.utc
                     ).strftime("%Y-%m")
-                    _geo_status["database_type"] = meta.database_type
-                    _geo_status["status"] = "ok"
+                    _geo_status["city"]["status"] = "ok"
                 except Exception as e:
-                    _geo_status["status"] = "error"
-                    _geo_status["error"] = str(e)
-    return _geo_reader
+                    _geo_status["city"]["status"] = "error"
+                    _geo_status["city"]["error"] = str(e)
+    return _geo_city_reader
 
 
-def _reload_geo_reader():
-    """Hot-reload the maxminddb reader after file update."""
-    global _geo_reader
+def _geo_asn_reader_get():
+    global _geo_asn_reader
+    if _geo_asn_reader is None and GEOIP_ASN_DB.exists():
+        with _geo_lock:
+            if _geo_asn_reader is None:
+                try:
+                    import maxminddb
+                    _geo_asn_reader = maxminddb.open_database(str(GEOIP_ASN_DB))
+                    meta = _geo_asn_reader.metadata()
+                    _geo_status["asn"]["build_epoch"] = meta.build_epoch
+                    _geo_status["asn"]["build_month"] = datetime.fromtimestamp(
+                        meta.build_epoch, timezone.utc
+                    ).strftime("%Y-%m")
+                    _geo_status["asn"]["status"] = "ok"
+                except Exception as e:
+                    _geo_status["asn"]["status"] = "error"
+                    _geo_status["asn"]["error"] = str(e)
+    return _geo_asn_reader
+
+
+def _reload_all_geo_readers():
+    """Hot-reload in-memory readers after DB updates."""
+    global _geo_city_reader, _geo_asn_reader
     with _geo_lock:
-        if _geo_reader is not None:
+        if _geo_city_reader is not None:
             try:
-                _geo_reader.close()
+                _geo_city_reader.close()
             except Exception:
                 pass
-            _geo_reader = None
-        if GEOIP_DB.exists():
+            _geo_city_reader = None
+        if _geo_asn_reader is not None:
             try:
-                import maxminddb
-                _geo_reader = maxminddb.open_database(str(GEOIP_DB))
-                meta = _geo_reader.metadata()
-                _geo_status["build_epoch"] = meta.build_epoch
-                _geo_status["build_month"] = datetime.fromtimestamp(
-                    meta.build_epoch, timezone.utc
-                ).strftime("%Y-%m")
-                _geo_status["database_type"] = meta.database_type
-                _geo_status["status"] = "ok"
-                _geo_status["error"] = None
-            except Exception as e:
-                _geo_status["status"] = "error"
-                _geo_status["error"] = str(e)
+                _geo_asn_reader.close()
+            except Exception:
+                pass
+            _geo_asn_reader = None
+    _geo_city_reader_get()
+    _geo_asn_reader_get()
 
 
-def _update_geoip_db() -> bool:
-    """Check db-ip.com for current month build; download, validate and hot-reload.
-
-    Safe:
-      - Atomic write via .tmp file then os.replace
-      - Validated with maxminddb open + sample lookup before replacement
-      - Backup kept at .mmdb.bak
-      - On any error, existing database remains active and untouched
-    """
+def _update_single_mmdb(db_key: str, db_file: Path, url_prefix: str, cur_month: str) -> bool:
+    """Safely download, test-open, backup and atomically replace one MMDB file."""
     import gzip
     import shutil
     import urllib.request
     import logging
 
-    logger = logging.getLogger("beszel.geoip")
-    now = datetime.now(timezone.utc)
-    cur_month = now.strftime("%Y-%m")
-    _geo_status["last_checked"] = now.isoformat()
-
-    # Determine current build month
-    reader = _geo_reader_get()
-    build_month = _geo_status.get("build_month")
-    if build_month is None and reader is not None:
-        try:
-            be = reader.metadata().build_epoch
-            build_month = datetime.fromtimestamp(be, timezone.utc).strftime("%Y-%m")
-            _geo_status["build_month"] = build_month
-        except Exception:
-            pass
-
-    if build_month is not None and build_month >= cur_month:
-        _geo_status["status"] = "ok"
-        return False
-
-    url = f"https://download.db-ip.com/free/dbip-city-lite-{cur_month}.mmdb.gz"
-    gz_path = GEOIP_DB.with_suffix(".mmdb.gz.tmp")
-    tmp_path = GEOIP_DB.with_suffix(".mmdb.tmp")
-    _geo_status["status"] = "updating"
+    logger = logging.getLogger(f"beszel.geoip.{db_key}")
+    url = f"https://download.db-ip.com/free/dbip-{url_prefix}-lite-{cur_month}.mmdb.gz"
+    gz_path = db_file.with_suffix(".mmdb.gz.tmp")
+    tmp_path = db_file.with_suffix(".mmdb.tmp")
 
     try:
-        GEOIP_DB.parent.mkdir(parents=True, exist_ok=True)
+        db_file.parent.mkdir(parents=True, exist_ok=True)
         req = urllib.request.Request(url, headers={"User-Agent": "hermes-beszel-geoip-updater"})
         with urllib.request.urlopen(req, timeout=180) as resp, open(gz_path, "wb") as f:
             shutil.copyfileobj(resp, f)
@@ -1005,7 +1048,7 @@ def _update_geoip_db() -> bool:
         with gzip.open(gz_path, "rb") as fi, open(tmp_path, "wb") as fo:
             shutil.copyfileobj(fi, fo)
 
-        # Validate downloaded database
+        # Validate with maxminddb
         import maxminddb
         test_reader = maxminddb.open_database(str(tmp_path))
         meta = test_reader.metadata()
@@ -1014,31 +1057,45 @@ def _update_geoip_db() -> bool:
         test_reader.close()
 
         if new_month < cur_month:
-            logger.info("GeoIP downloaded build %s is older than current month %s, skip", new_month, cur_month)
+            logger.info("Downloaded %s build %s older than %s, skipping", db_key, new_month, cur_month)
             tmp_path.unlink(missing_ok=True)
-            _geo_status["status"] = "ok"
             return False
 
-        # Backup old DB and atomic replace
-        if GEOIP_DB.exists():
-            shutil.copy2(GEOIP_DB, GEOIP_DB.with_suffix(".mmdb.bak"))
-        os.replace(tmp_path, GEOIP_DB)
-
-        # Hot-reload in-memory reader
-        _reload_geo_reader()
-        _geo_status["last_updated"] = datetime.now(timezone.utc).isoformat()
-        _geo_status["status"] = "ok"
-        _geo_status["error"] = None
-        logger.info("GeoIP database successfully updated to %s", new_month)
+        if db_file.exists():
+            shutil.copy2(db_file, db_file.with_suffix(".mmdb.bak"))
+        os.replace(tmp_path, db_file)
+        logger.info("%s DB updated to %s", db_key, new_month)
         return True
     except Exception as e:
-        logger.warning("GeoIP auto-update failed: %s", e)
-        _geo_status["status"] = "error"
-        _geo_status["error"] = str(e)
+        logger.warning("%s DB update failed: %s", db_key, e)
         tmp_path.unlink(missing_ok=True)
         return False
     finally:
         gz_path.unlink(missing_ok=True)
+
+
+def _update_all_geoip_dbs() -> bool:
+    """Update both City and ASN databases if a newer monthly build exists."""
+    now = datetime.now(timezone.utc)
+    cur_month = now.strftime("%Y-%m")
+    _geo_status["last_checked"] = now.isoformat()
+
+    city_updated = False
+    asn_updated = False
+
+    city_month = _geo_status["city"].get("build_month")
+    if not city_month or city_month < cur_month:
+        city_updated = _update_single_mmdb("city", GEOIP_CITY_DB, "city", cur_month)
+
+    asn_month = _geo_status["asn"].get("build_month")
+    if not asn_month or asn_month < cur_month:
+        asn_updated = _update_single_mmdb("asn", GEOIP_ASN_DB, "asn", cur_month)
+
+    if city_updated or asn_updated:
+        _reload_all_geo_readers()
+        _geo_status["last_updated"] = datetime.now(timezone.utc).isoformat()
+        return True
+    return False
 
 
 def _geoip_updater_loop():
@@ -1046,7 +1103,7 @@ def _geoip_updater_loop():
     time.sleep(30)
     while True:
         try:
-            _update_geoip_db()
+            _update_all_geoip_dbs()
         except Exception:
             pass
         time.sleep(24 * 3600)
@@ -1058,34 +1115,65 @@ _updater_thread.start()
 
 
 def _geoip_lookup(conn: sqlite3.Connection, ip: str):
-    """Return (country, city, lat, lon); cached in geo_cache. Centre-side only —
-    agents push raw IPs and never carry the mmdb."""
+    """Return (country, city, asn, org, lat, lon); cached in geo_cache.
+    Enriched on the centre from both DB-IP City and ASN databases."""
     row = conn.execute(
-        "SELECT country, asn, lat, lon FROM geo_cache WHERE ip = ?", (ip,)
+        "SELECT country, city, asn, org, lat, lon FROM geo_cache WHERE ip = ?", (ip,)
     ).fetchone()
-    if row:
-        return row[0], row[1], row[2], row[3]
-    reader = _geo_reader_get()
-    if not reader:
-        return None, None, None, None
-    try:
-        r = reader.get(ip)
-    except Exception:
-        return None, None, None, None
-    if not r:
-        return None, None, None, None
-    country = r.get("country", {}).get("iso_code")
-    city = r.get("city", {}).get("names", {}).get("en")
-    loc = r.get("location", {})
-    lat, lon = loc.get("latitude"), loc.get("longitude")
+    if row and row["country"] and row["asn"]:
+        return row[0], row[1], row[2], row[3], row[4], row[5]
+
+    country = row["country"] if row else None
+    city = row["city"] if row else None
+    asn = row["asn"] if row else None
+    org = row["org"] if row else None
+    lat = row["lat"] if row else None
+    lon = row["lon"] if row else None
+
+    # City reader
+    if not country or not city or lat is None or lon is None:
+        city_reader = _geo_city_reader_get()
+        if city_reader:
+            try:
+                r = city_reader.get(ip)
+                if r:
+                    country = country or r.get("country", {}).get("iso_code")
+                    city = city or r.get("city", {}).get("names", {}).get("en")
+                    loc = r.get("location", {})
+                    lat = lat if lat is not None else loc.get("latitude")
+                    lon = lon if lon is not None else loc.get("longitude")
+            except Exception:
+                pass
+
+    # ASN reader
+    if not asn or not org:
+        asn_reader = _geo_asn_reader_get()
+        if asn_reader:
+            try:
+                r = asn_reader.get(ip)
+                if r:
+                    asn_num = r.get("autonomous_system_number")
+                    asn = asn or (f"AS{asn_num}" if asn_num else None)
+                    org = org or r.get("autonomous_system_organization")
+            except Exception:
+                pass
+
     now = datetime.now(timezone.utc).isoformat()
-    # NB: geo_cache.asn column carries the city name (legacy naming the UI reads).
     conn.execute(
-        "INSERT OR REPLACE INTO geo_cache (ip, country, asn, org, lat, lon, first_seen, last_seen, query_count) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, COALESCE((SELECT query_count + 1 FROM geo_cache WHERE ip = ?), 1))",
-        (ip, country, city, city, lat, lon, now, now, ip),
+        "INSERT INTO geo_cache (ip, country, city, asn, org, lat, lon, first_seen, last_seen, query_count) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1) "
+        "ON CONFLICT(ip) DO UPDATE SET "
+        "country=COALESCE(excluded.country, geo_cache.country), "
+        "city=COALESCE(excluded.city, geo_cache.city), "
+        "asn=COALESCE(excluded.asn, geo_cache.asn), "
+        "org=COALESCE(excluded.org, geo_cache.org), "
+        "lat=COALESCE(excluded.lat, geo_cache.lat), "
+        "lon=COALESCE(excluded.lon, geo_cache.lon), "
+        "last_seen=excluded.last_seen, "
+        "query_count=geo_cache.query_count + 1",
+        (ip, country, city, asn, org, lat, lon, now, now),
     )
-    return country, city, lat, lon
+    return country, city, asn, org, lat, lon
 
 
 # ---------------------------------------------------------------- validation
@@ -1164,20 +1252,20 @@ def _ingest_one(conn: sqlite3.Connection, machine_id: str, ev: dict) -> bool:
     if clean is None:
         return False
 
-    country, city, lat, lon = _geoip_lookup(conn, clean["src_ip"])
+    country, city, asn, org, lat, lon = _geoip_lookup(conn, clean["src_ip"])
 
     # Idempotent upsert. On event_id conflict keep the larger count (agents push
     # cumulative window snapshots, and a retransmission must never double-count).
     conn.execute(
         "INSERT INTO security_events "
         "(ts, machine_id, event_type, src_ip, jail, uri, ua, username, raw_excerpt, "
-        " country, asn, lat, lon, count, burst, event_id) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+        " country, city, asn, org, lat, lon, count, burst, event_id) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
         "ON CONFLICT(event_id) DO UPDATE SET count = MAX(security_events.count, excluded.count)",
         (
             clean["ts"], machine_id, clean["event_type"], clean["src_ip"],
             clean["jail"], clean["uri"], clean["ua"], clean["username"],
-            clean["raw_excerpt"], country, city, lat, lon, clean["count"],
+            clean["raw_excerpt"], country, city, asn, org, lat, lon, clean["count"],
             clean["burst"], clean["event_id"],
         ),
     )

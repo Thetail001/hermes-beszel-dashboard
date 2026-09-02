@@ -21,7 +21,8 @@ interface SecurityEvent {
 	username: string | null
 	country: string | null
 	city?: string | null
-	asn: string | null
+	asn?: string | null
+	org?: string | null
 	lat: number | null
 	lon: number | null
 	raw_excerpt: string | null
@@ -39,6 +40,8 @@ interface Ban {
 	ban_count?: number
 	country?: string | null
 	city?: string | null
+	asn?: string | null
+	org?: string | null
 	lat?: number | null
 	lon?: number | null
 }
@@ -75,6 +78,9 @@ interface Machine {
 interface Attacker {
 	src_ip: string
 	country: string | null
+	city?: string | null
+	asn?: string | null
+	org?: string | null
 	lat: number | null
 	lon: number | null
 	total_events: number
@@ -1663,7 +1669,13 @@ export default function SecurityPage() {
 									onClick={() => setSelectedIp(b.ip)}
 								>
 									<Badge variant="destructive">{b.jail}</Badge>
-									<span className="font-mono">{b.ip}</span>
+									<span className="font-mono text-sm font-semibold">{b.ip}</span>
+									{b.country && <Badge variant="outline" className="text-xs">{b.country}</Badge>}
+									{(b.city || b.org || b.asn) && (
+										<span className="hidden sm:inline text-xs text-muted-foreground truncate max-w-[280px]">
+											{[b.city, b.org || b.asn].filter(Boolean).join(" · ")}
+										</span>
+									)}
 									<span className="ml-auto text-xs text-muted-foreground">{timeAgo(b.banned_at)}</span>
 								</div>
 							))}
@@ -1787,10 +1799,15 @@ export default function SecurityPage() {
 									className="cursor-pointer rounded-md border p-3 transition-colors hover:bg-muted/50"
 									onClick={() => setSelectedIp(a.src_ip)}
 								>
-									<div className="flex items-center gap-3">
+									<div className="flex flex-wrap items-center gap-2 sm:gap-3">
 										<span className="font-mono text-sm font-semibold">{a.src_ip}</span>
 										{a.country && <Badge variant="outline" className="text-xs">{a.country}</Badge>}
-										<span className="text-xs text-muted-foreground">{a.total_events} events</span>
+										{(a.city || a.org || a.asn) && (
+											<span className="text-xs text-muted-foreground truncate max-w-[320px]">
+												{[a.city, a.org || a.asn].filter(Boolean).join(" · ")}
+											</span>
+										)}
+										<span className="text-xs text-muted-foreground">({a.total_events} events)</span>
 										<span className="ml-auto text-xs text-muted-foreground">{timeAgo(a.last_seen)}</span>
 									</div>
 									<div className="mt-2 flex flex-wrap gap-1">
@@ -1901,8 +1918,19 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 				</Button>
 				<h1 className="text-2xl font-semibold tracking-tight font-mono">{ip}</h1>
 				{geo && (
-					<div className="text-sm text-muted-foreground">
-						{geo.country} {geo.asn} {geo.lat && geo.lon ? `(${geo.lat.toFixed(2)}, ${geo.lon.toFixed(2)})` : ""}
+					<div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+						{geo.country && <Badge variant="outline">{geo.country}</Badge>}
+						{geo.city && <span>{geo.city}</span>}
+						{(geo.asn || geo.org) && (
+							<Badge variant="secondary" className="font-mono">
+								{[geo.asn, geo.org].filter(Boolean).join(" · ")}
+							</Badge>
+						)}
+						{geo.lat && geo.lon ? (
+							<span className="text-muted-foreground/60">
+								({geo.lat.toFixed(2)}, {geo.lon.toFixed(2)})
+							</span>
+						) : null}
 					</div>
 				)}
 				<div className="ml-auto flex gap-2">
