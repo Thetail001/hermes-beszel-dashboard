@@ -175,6 +175,7 @@ async def pb_proxy(path: str, request: Request):
 
 @router.get("/ping")
 async def ping():
+    """Liveness probe — reports the configured beszel hub URL. No auth."""
     return {"ok": True, "hub": HUB}
 
 
@@ -408,19 +409,20 @@ async def security_bans_current(
             conds.append("b.jail = ?")
             params.append(jail)
 
-        # Time filter on banned_at (period=custom uses start/end)
+        # Time filter on banned_at (period=custom uses start/end). julianday
+        # comparison — banned_at carries a tz offset, so string compare skews.
         if period == "custom":
             if start:
-                conds.append("b.banned_at >= ?")
+                conds.append("julianday(b.banned_at) >= julianday(?)")
                 params.append(start)
             if end:
-                conds.append("b.banned_at <= ?")
+                conds.append("julianday(b.banned_at) <= julianday(?)")
                 params.append(end)
         else:
-            hours = {"24h": 24, "7d": 168, "30d": 720}.get(period)
-            if hours:
-                conds.append("b.banned_at > datetime('now', ?)")
-                params.append(f"-{hours} hours")
+            days = {"24h": 1, "7d": 7, "30d": 30}.get(period)
+            if days:
+                conds.append("julianday(b.banned_at) > julianday('now') - ?")
+                params.append(days)
 
         where = " AND ".join(conds)
 
@@ -648,14 +650,14 @@ async def security_attackers(
     offset = max(offset, 0)
     conn = _sec_db()
     try:
-        # Build time filter
+        # Build time filter (julianday — ts carries a tz offset, string compare skews)
         if start and end:
-            time_cond = "e.ts >= ? AND e.ts <= ?"
+            time_cond = "julianday(e.ts) >= julianday(?) AND julianday(e.ts) <= julianday(?)"
             params = [start, end]
         else:
-            hours = {"24h": 24, "7d": 168, "30d": 720}.get(period, 168)
-            time_cond = "e.ts > datetime('now', ?)"
-            params = [f"-{hours} hours"]
+            days = {"24h": 1, "7d": 7, "30d": 30}.get(period, 7)
+            time_cond = "julianday(e.ts) > julianday('now') - ?"
+            params: list = [days]
 
         # Additional filters
         filters = ""
@@ -738,16 +740,22 @@ async def security_export(
     format: str = "json",
     machine_id: str = "",
 ):
-    """Export filtered events as JSON or CSV download."""
+    """Export the filtered raw event stream as a JSON/CSV download.
+
+    Exports raw security_events rows (not aggregated) matching the same filter
+    params as the Attackers list, so the download mirrors the UI's current
+    view. Consumed by the Attackers card's JSON/CSV buttons. Auth: session.
+    """
     conn = _sec_db()
     try:
+        # julianday comparison — ts carries a tz offset, string compare skews.
         if start and end:
-            time_cond = "ts >= ? AND ts <= ?"
+            time_cond = "julianday(ts) >= julianday(?) AND julianday(ts) <= julianday(?)"
             params = [start, end]
         else:
-            hours = {"24h": 24, "7d": 168, "30d": 720}.get(period, 168)
-            time_cond = "ts > datetime('now', ?)"
-            params = [f"-{hours} hours"]
+            days = {"24h": 1, "7d": 7, "30d": 30}.get(period, 7)
+            time_cond = "julianday(ts) > julianday('now') - ?"
+            params: list = [days]
 
         filters = ""
         if type:
@@ -820,7 +828,11 @@ async def security_export(
 
 @router.post("/security/rotate")
 async def security_rotate(keep_days: int = 90):
-    """Manually trigger log rotation."""
+    """Manually trigger event retention pruning.
+
+    Deletes events older than keep_days (default 90). The agent normally runs
+    this on a schedule; this lets the centre trigger it manually. Auth: session.
+    """
     conn = _sec_db()
     try:
         cur = conn.execute(
@@ -836,7 +848,11 @@ async def security_rotate(keep_days: int = 90):
 
 @router.get("/security/ip/{ip}")
 async def security_ip_profile(ip: str):
-    """IP profile: all events + ban history + geo."""
+    """Per-IP drill-down: recent events + ban history + geo profile.
+
+    Backs the Level-2 IP investigation drawer (IpTimeline). Lazily geo-enriches
+    the IP on first cache miss. Auth: session.
+    """
     conn = _sec_db()
     try:
         events = conn.execute(
