@@ -1120,7 +1120,7 @@ def _geoip_lookup(conn: sqlite3.Connection, ip: str):
     row = conn.execute(
         "SELECT country, city, asn, org, lat, lon FROM geo_cache WHERE ip = ?", (ip,)
     ).fetchone()
-    if row and row["country"] and row["asn"]:
+    if row and row["country"] and (row["asn"] and str(row["asn"]).startswith("AS")) and (row["city"] is not None or row["lat"] is not None):
         return row[0], row[1], row[2], row[3], row[4], row[5]
 
     country = row["country"] if row else None
@@ -1392,7 +1392,7 @@ async def security_machines():
                     if ipaddress.ip_address(ip).is_global:
                         conn = _sec_db()
                         try:
-                            country, city, lat, lon = _geoip_lookup(conn, ip)
+                            country, city, asn, org, lat, lon = _geoip_lookup(conn, ip)
                             conn.commit()
                         finally:
                             conn.close()
