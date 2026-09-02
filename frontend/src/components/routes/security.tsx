@@ -95,6 +95,8 @@ interface FilterState {
 	end: string
 	type: string
 	country: string
+	asn: string
+	org: string
 	ip: string
 	sort: string
 	machine_id: string
@@ -136,6 +138,8 @@ function buildQueryString(f: FilterState): string {
 	if (f.end) p.set("end", f.end)
 	if (f.type) p.set("type", f.type)
 	if (f.country) p.set("country", f.country)
+	if (f.asn) p.set("asn", f.asn)
+	if (f.org) p.set("org", f.org)
 	if (f.ip) p.set("ip", f.ip)
 	if (f.sort) p.set("sort", f.sort)
 	if (f.machine_id) p.set("machine_id", f.machine_id)
@@ -151,6 +155,8 @@ function parseQueryInput(input: string): Partial<FilterState> {
 		if (key === "ip") out.ip = val
 		if (key === "type") out.type = val
 		if (key === "country") out.country = val
+		if (key === "asn") out.asn = val
+		if (key === "org") out.org = val
 	}
 	return out
 }
@@ -1255,6 +1261,8 @@ export default function SecurityPage() {
 		end: "",
 		type: "",
 		country: "",
+		asn: "",
+		org: "",
 		ip: "",
 		sort: "recent",
 		machine_id: "",
@@ -1704,7 +1712,7 @@ export default function SecurityPage() {
 					<div className="flex flex-wrap items-center gap-3 border-t pt-3">
 						<div className="flex items-center gap-2">
 							<Input
-								placeholder="ip:1.2.3.4 type:ban country:NL"
+								placeholder="ip:1.2.3.4 type:ban country:NL asn:14061 org:amazon"
 								value={queryInput}
 								onChange={(e) => setQueryInput(e.target.value)}
 								onKeyDown={(e) => e.key === "Enter" && handleQuerySubmit()}
@@ -1750,7 +1758,7 @@ export default function SecurityPage() {
 							<option value="count">Most events</option>
 							<option value="newest">Newest attacker</option>
 						</select>
-						{(filter.type || filter.country || filter.ip) && (
+						{(filter.type || filter.country || filter.asn || filter.org || filter.ip) && (
 							<div className="flex items-center gap-1">
 								{filter.type && (
 									<Badge variant="secondary" className="text-xs">
@@ -1762,6 +1770,18 @@ export default function SecurityPage() {
 									<Badge variant="secondary" className="text-xs">
 										country:{filter.country}
 										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, country: "" }))}>×</button>
+									</Badge>
+								)}
+								{filter.asn && (
+									<Badge variant="secondary" className="text-xs">
+										asn:{filter.asn}
+										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, asn: "" }))}>×</button>
+									</Badge>
+								)}
+								{filter.org && (
+									<Badge variant="secondary" className="text-xs">
+										org:{filter.org}
+										<button className="ml-1" onClick={() => setFilter((f) => ({ ...f, org: "" }))}>×</button>
 									</Badge>
 								)}
 								{filter.ip && (

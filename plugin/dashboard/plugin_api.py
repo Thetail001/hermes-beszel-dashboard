@@ -608,6 +608,8 @@ async def security_export(
     end: str = "",
     type: str = "",
     country: str = "",
+    asn: str = "",
+    org: str = "",
     ip: str = "",
     sort: str = "recent",
     format: str = "json",
@@ -631,6 +633,12 @@ async def security_export(
         if country:
             filters += " AND country = ?"
             params.append(country)
+        if asn:
+            filters += " AND asn LIKE ?"
+            params.append(f"%{asn}%")
+        if org:
+            filters += " AND org LIKE ?"
+            params.append(f"%{org}%")
         if ip:
             filters += " AND src_ip = ?"
             params.append(ip)
