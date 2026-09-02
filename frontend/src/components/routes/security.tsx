@@ -309,6 +309,9 @@ function EventsChart({ machineId, refreshInterval }: { machineId: string; refres
 	// Forward navigation is clamped to the current window (no future buckets).
 	const canGoForward = offset < 0
 	const isStacked = metric === "events" && splitType
+	// Evenly-spaced axis ticks per granularity. recharts interval=N renders
+	// every (N+1)-th tick, so hour shows every 4h, day every 5d, month all.
+	const tickInterval = bucket === "hour" ? 3 : bucket === "day" ? 4 : 0
 
 	return (
 		<Card>
@@ -385,7 +388,7 @@ function EventsChart({ machineId, refreshInterval }: { machineId: string; refres
 				<ChartContainer className="h-64 w-full">
 					<BarChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
 						<CartesianGrid vertical={false} strokeDasharray="3 3" />
-						<XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={12} fontSize={11} />
+						<XAxis dataKey="label" tickLine={false} axisLine={false} interval={tickInterval} fontSize={11} />
 						<YAxis tickLine={false} axisLine={false} fontSize={11} allowDecimals={false} />
 						<ChartTooltip content={<ChartTooltipContent />} />
 						{isStacked ? (
@@ -1635,28 +1638,6 @@ export default function SecurityPage() {
 						<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => fetchData()} disabled={loading}>
 							{loading ? "…" : "↻"}
 						</Button>
-						<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => handleExport("json")}>
-							JSON
-						</Button>
-						<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => handleExport("csv")}>
-							CSV
-						</Button>
-					</div>
-					<div className="flex items-center gap-2">
-						<Label className="text-xs"><Trans>Effects</Trans></Label>
-						<div className="flex gap-1">
-							{[0, 1, 2, 3].map((level) => (
-								<Button
-									key={level}
-									variant={effectLevel === level ? "default" : "outline"}
-									size="sm"
-									className="h-6 w-6 p-0 text-xs"
-									onClick={() => setEffectLevel(level)}
-								>
-									{level}
-								</Button>
-							))}
-						</div>
 					</div>
 				</div>
 			</div>
@@ -1698,27 +1679,45 @@ export default function SecurityPage() {
 			<Card>
 				<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
 					<CardTitle><Trans>Attack Map</Trans></CardTitle>
-					{summary?.geoip && (
-						<div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 px-2.5 py-1 rounded-md border">
-							<span
-								className={`inline-block h-2 w-2 rounded-full ${
-									summary.geoip.status === "updating"
-										? "bg-amber-400 animate-pulse"
-										: summary.geoip.status === "error"
-										? "bg-red-500"
-										: "bg-emerald-500"
-								}`}
-							/>
-							<span>
-								<Trans>GeoIP DB</Trans>: {summary.geoip.database_type || "DB-IP City"} ({summary.geoip.build_month || "Auto"})
-							</span>
-							{summary.geoip.last_checked && (
-								<span className="hidden sm:inline text-muted-foreground/60">
-									· <Trans>Checked</Trans> {summary.geoip.last_checked.slice(0, 10)}
+					<div className="flex items-center gap-3">
+						{summary?.geoip && (
+							<div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 px-2.5 py-1 rounded-md border">
+								<span
+									className={`inline-block h-2 w-2 rounded-full ${
+										summary.geoip.status === "updating"
+											? "bg-amber-400 animate-pulse"
+											: summary.geoip.status === "error"
+											? "bg-red-500"
+											: "bg-emerald-500"
+									}`}
+								/>
+								<span>
+									<Trans>GeoIP DB</Trans>: {summary.geoip.database_type || "DB-IP City"} ({summary.geoip.build_month || "Auto"})
 								</span>
-							)}
+								{summary.geoip.last_checked && (
+									<span className="hidden sm:inline text-muted-foreground/60">
+										· <Trans>Checked</Trans> {summary.geoip.last_checked.slice(0, 10)}
+									</span>
+								)}
+							</div>
+						)}
+						<div className="flex items-center gap-2">
+							<Label className="text-xs"><Trans>Effects</Trans></Label>
+							<div className="flex gap-1">
+								{[0, 1, 2, 3].map((level) => (
+									<Button
+										key={level}
+										variant={effectLevel === level ? "default" : "outline"}
+										size="sm"
+										className="h-6 w-6 p-0 text-xs"
+										onClick={() => setEffectLevel(level)}
+									>
+										{level}
+									</Button>
+								))}
+							</div>
 						</div>
-					)}
+					</div>
 				</CardHeader>
 				<CardContent>
 					<AttackMap
@@ -1865,7 +1864,18 @@ export default function SecurityPage() {
 			{/* Attackers (Level 1) with integrated filter bar */}
 			<Card>
 				<CardHeader className="space-y-3">
-					<CardTitle><Trans>Attackers</Trans></CardTitle>
+					<div className="flex items-center justify-between">
+						<CardTitle><Trans>Attackers</Trans></CardTitle>
+						<div className="flex items-center gap-2">
+							<span className="text-xs text-muted-foreground">Export filtered attackers</span>
+							<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => handleExport("json")}>
+								JSON
+							</Button>
+							<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={() => handleExport("csv")}>
+								CSV
+							</Button>
+						</div>
+					</div>
 					{/* Filter bar inside Attackers card header */}
 					<div className="flex flex-wrap items-center gap-3 border-t pt-3">
 						<div className="flex items-center gap-2">
