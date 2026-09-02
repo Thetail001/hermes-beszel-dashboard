@@ -20,6 +20,7 @@ interface SecurityEvent {
 	ua: string | null
 	username: string | null
 	country: string | null
+	city?: string | null
 	asn: string | null
 	lat: number | null
 	lon: number | null
@@ -37,6 +38,7 @@ interface Ban {
 	unbanned_at: string | null
 	ban_count?: number
 	country?: string | null
+	city?: string | null
 	lat?: number | null
 	lon?: number | null
 }
@@ -229,7 +231,7 @@ function DensitySparkline({ events }: { events: SecurityEvent[] }) {
 	)
 }
 
-/** Attack Map: Interactive Canvas-based world map with pan, zoom, LOD & particle trajectories */
+/** Attack Map: City-Level Hotspot Radar with clean consolidated trajectories, pan & zoom */
 function AttackMap({
 	events,
 	bans,
@@ -260,7 +262,7 @@ function AttackMap({
 
 	// Tooltip state
 	const [hovered, setHovered] = useState<{
-		type: "machine" | "source"
+		type: "machine" | "hotspot"
 		title: string
 		subtitle?: string
 		badge?: string
@@ -318,6 +320,22 @@ function AttackMap({
 		return () => container.removeEventListener("wheel", onWheel)
 	}, [])
 
+	// Structure for aggregated City Hotspots
+	type CityHotspot = {
+		key: string
+		lat: number
+		lon: number
+		pos: [number, number]
+		country: string | null
+		city: string | null
+		uniqueIps: Set<string>
+		totalHits: number
+		targetMachines: Record<string, number>
+		typeBreakdown: Record<string, number>
+		primaryType: string
+		primaryColor: string
+	}
+
 	// Canvas render
 	useEffect(() => {
 		if (!worldData || !canvasRef.current || !containerRef.current) return
@@ -362,168 +380,127 @@ function AttackMap({
 			(machines[0]?.name && machinePositions[machines[0].name]) ||
 			[width / 2, height / 2]
 
-		// Prepare unified items based on mapMode
-		type MapItem = {
-			id: number | string
-			ip: string
-			country: string | null
-			city?: string | null
-			lat: number
-			lon: number
-			machine_id: string
-			type: string
-			count: number
-			ts: string
-			color: string
-			// Dispersed coordinates computed in layout pass
-			dispX?: number
-			dispY?: number
-			clusterKey?: string
-		}
+		// Prepare unified raw items
+		const raw: any[] = mapMode === "attackers" ? events : bans
+		const validItems = raw.filter(
+			(it) => it.lat != null && it.lon != null && it.event_type !== "unban" && it.event_type !== "auth_success"
+		)
 
-		let rawItems: MapItem[] = []
-		if (mapMode === "attackers") {
-			rawItems = events
-				.filter((ev) => ev.lat != null && ev.lon != null && ev.event_type !== "unban" && ev.event_type !== "auth_success")
-				.map((ev) => ({
-					id: ev.id,
-					ip: ev.src_ip,
-					country: ev.country,
-					lat: ev.lat!,
-					lon: ev.lon!,
-					machine_id: ev.machine_id,
-					type: ev.event_type,
-					count: ev.count || 1,
-					ts: ev.ts,
-					color: TYPE_COLORS[ev.event_type] || "#3b82f6",
-				}))
-		} else {
-			rawItems = bans
-				.filter((b) => b.lat != null && b.lon != null)
-				.map((b) => ({
-					id: b.id,
-					ip: b.ip,
-					country: b.country || null,
-					lat: b.lat!,
-					lon: b.lon!,
-					machine_id: b.machine_id,
-					type: b.jail,
-					count: b.ban_count || 1,
-					ts: b.banned_at,
-					color: "#ef4444",
-				}))
-		}
-
-		// Density tiering: Level 0 (20), Level 1 (50), Level 2/3 (All)
-		let maxLines = rawItems.length
-		if (effectLevel === 0) maxLines = 20
-		else if (effectLevel === 1) maxLines = 50
-		const visibleItems = rawItems.slice(0, maxLines)
-
-		// Group items into geographic clusters by coordinates (rounded to ~1km)
-		type GeoCluster = {
-			key: string
-			lat: number
-			lon: number
-			basePos: [number, number]
-			items: MapItem[]
-			totalHits: number
-			country: string | null
-		}
-
-		const clusters: Record<string, GeoCluster> = {}
-		for (const item of visibleItems) {
-			const cKey = `${item.lat.toFixed(2)},${item.lon.toFixed(2)}`
-			if (!clusters[cKey]) {
-				const basePos = projection([item.lon, item.lat])
-				if (!basePos) continue
-				clusters[cKey] = {
-					key: cKey,
-					lat: item.lat,
-					lon: item.lon,
-					basePos,
-					items: [],
+		// Aggregate into City Hotspots
+		const hotspotsMap: Record<string, CityHotspot> = {}
+		for (const it of validItems) {
+			const itLat = Number(it.lat)
+			const itLon = Number(it.lon)
+			const k = `${itLat.toFixed(2)},${itLon.toFixed(2)}`
+			if (!hotspotsMap[k]) {
+				const pos = projection([itLon, itLat])
+				if (!pos) continue
+				hotspotsMap[k] = {
+					key: k,
+					lat: itLat,
+					lon: itLon,
+					pos,
+					country: it.country || null,
+					city: it.city || null,
+					uniqueIps: new Set(),
 					totalHits: 0,
-					country: item.country,
+					targetMachines: {},
+					typeBreakdown: {},
+					primaryType: "",
+					primaryColor: mapMode === "bans" ? "#ef4444" : "#3b82f6",
 				}
 			}
-			item.clusterKey = cKey
-			clusters[cKey].items.push(item)
-			clusters[cKey].totalHits += item.count
+
+			const h = hotspotsMap[k]
+			const ip = it.ip || it.src_ip
+			if (ip) h.uniqueIps.add(ip)
+
+			const count = Number(it.count || it.ban_count || 1)
+			h.totalHits += count
+
+			const mId = it.machine_id || "default"
+			h.targetMachines[mId] = (h.targetMachines[mId] || 0) + count
+
+			const evType = it.event_type || it.jail || "attack"
+			h.typeBreakdown[evType] = (h.typeBreakdown[evType] || 0) + count
 		}
 
-		// Compute dispersed satellite coordinates (Spiderfy / Orbital Dispersion)
-		const isDispersed = zoom >= 2.0
-		const clusterList = Object.values(clusters)
-
-		for (const cluster of clusterList) {
-			const n = cluster.items.length
-			if (n === 1 || !isDispersed) {
-				for (const item of cluster.items) {
-					item.dispX = cluster.basePos[0]
-					item.dispY = cluster.basePos[1]
+		// Calculate primary attack type and color per hotspot
+		const hotspots = Object.values(hotspotsMap)
+		for (const h of hotspots) {
+			let maxType = ""
+			let maxC = 0
+			for (const [t, c] of Object.entries(h.typeBreakdown)) {
+				if (c > maxC) {
+					maxC = c
+					maxType = t
 				}
-			} else {
-				// Smooth dispersion expansion between 2.0x and 2.5x zoom
-				const tExp = Math.min(1.0, (zoom - 2.0) / 0.5)
-				const orbitScreenR = (16 + Math.min(n, 16) * 1.8) * tExp
-				const orbitWorldR = orbitScreenR / zoom
-
-				for (let i = 0; i < n; i++) {
-					const item = cluster.items[i]
-					const angle = (2 * Math.PI * i) / n - Math.PI / 2
-					item.dispX = cluster.basePos[0] + Math.cos(angle) * orbitWorldR
-					item.dispY = cluster.basePos[1] + Math.sin(angle) * orbitWorldR
-				}
+			}
+			h.primaryType = maxType
+			if (mapMode === "attackers") {
+				h.primaryColor = TYPE_COLORS[maxType] || "#3b82f6"
 			}
 		}
 
-		// Pre-calculate trajectories from (dispX, dispY) -> target machine
-		const lines: Array<{
-			item: MapItem
+		// Build Consolidated Trajectory Flows (from Hotspot -> Target Machine)
+		type StreamFlow = {
+			hotspot: CityHotspot
+			targetId: string
 			sx: number
 			sy: number
 			tx: number
 			ty: number
 			midX: number
 			midY: number
+			hits: number
 			color: string
 			width: number
 			seed: number
-			radius: number
-		}> = []
-
-		for (const item of visibleItems) {
-			if (item.dispX == null || item.dispY == null) continue
-			const sx = item.dispX
-			const sy = item.dispY
-
-			const targetPos = (item.machine_id && machinePositions[item.machine_id]) || defaultTargetPos
-			const [tx, ty] = targetPos
-
-			const dist = Math.hypot(tx - sx, ty - sy)
-			const seed = Math.abs(((Number(item.id) || 1) * 37 + (item.ip ? item.ip.charCodeAt(0) * 19 : 0)) % 100)
-			const curveFactor = seed / 100 - 0.5
-			const curvature = Math.min(dist * 0.25, 70)
-			const midX = (sx + tx) / 2 + curveFactor * curvature
-			const midY = (sy + ty) / 2 - curvature * 0.6
-
-			const radius = Math.min(2.2 + Math.log2(item.count + 1) * 0.7, 6.0)
-
-			lines.push({
-				item,
-				sx,
-				sy,
-				tx,
-				ty,
-				midX,
-				midY,
-				color: item.color,
-				width: effectLevel >= 3 ? 1.5 : 1.0,
-				seed,
-				radius,
-			})
 		}
+
+		const streamFlows: StreamFlow[] = []
+		for (const h of hotspots) {
+			for (const [mId, subHits] of Object.entries(h.targetMachines)) {
+				// If a specific machine is selected, filter out flows to other machines
+				if (selectedMachineId && mId !== selectedMachineId && mId !== "default") {
+					continue
+				}
+
+				const targetPos = (mId && machinePositions[mId]) || defaultTargetPos
+				const sx = h.pos[0]
+				const sy = h.pos[1]
+				const tx = targetPos[0]
+				const ty = targetPos[1]
+
+				const dist = Math.hypot(tx - sx, ty - sy)
+				const seed = (Math.abs(Math.sin(h.lat * 123.45 + h.lon * 67.89)) * 100) % 1
+				const curveFactor = (seed - 0.5) * 0.4
+				const curvature = Math.min(dist * 0.22, 60)
+				const midX = (sx + tx) / 2 + curveFactor * curvature
+				const midY = (sy + ty) / 2 - curvature * 0.65
+
+				streamFlows.push({
+					hotspot: h,
+					targetId: mId,
+					sx,
+					sy,
+					tx,
+					ty,
+					midX,
+					midY,
+					hits: subHits,
+					color: h.primaryColor,
+					width: Math.max(0.6 / zoom, 0.4) * (1 + Math.min(Math.log2(subHits + 1), 3) * 0.35),
+					seed,
+				})
+			}
+		}
+
+		// Density tiering: Level 0 (15 flows), Level 1 (35 flows), Level 2/3 (All flows)
+		let maxFlows = streamFlows.length
+		if (effectLevel === 0) maxFlows = 15
+		else if (effectLevel === 1) maxFlows = 35
+		const activeFlows = streamFlows.sort((a, b) => b.hits - a.hits).slice(0, maxFlows)
 
 		const hasGrid = effectLevel >= 1
 		const hasPulse = effectLevel >= 2
@@ -536,7 +513,7 @@ function AttackMap({
 			ctx.fillStyle = "#0a0a0f"
 			ctx.fillRect(0, 0, width, height)
 
-			// Apply Camera Transform
+			// Camera Transform
 			ctx.save()
 			ctx.translate(pan.x, pan.y)
 			ctx.scale(zoom, zoom)
@@ -577,152 +554,68 @@ function AttackMap({
 				ctx.stroke()
 			}
 
-			// Trajectory Arcs
-			for (const line of lines) {
-				ctx.strokeStyle = line.color
-				ctx.lineWidth = Math.max(0.6 / zoom, 0.4) * line.width
-				ctx.globalAlpha = 0.45
+			// Trajectory Flow Streams
+			for (const flow of activeFlows) {
+				const alpha = Math.min(0.22 + Math.log2(flow.hits + 1) * 0.08, 0.6)
+				ctx.strokeStyle = flow.color
+				ctx.lineWidth = flow.width
+				ctx.globalAlpha = alpha
 				ctx.beginPath()
-				ctx.moveTo(line.sx, line.sy)
-				ctx.quadraticCurveTo(line.midX, line.midY, line.tx, line.ty)
+				ctx.moveTo(flow.sx, flow.sy)
+				ctx.quadraticCurveTo(flow.midX, flow.midY, flow.tx, flow.ty)
 				ctx.stroke()
 				ctx.globalAlpha = 1.0
 			}
 
 			// Photon Particle Stream (Level 3 ONLY)
-			if (hasParticles && lines.length > 0) {
-				for (let i = 0; i < lines.length; i++) {
-					const line = lines[i]
-					const t = (time / 1600 + line.seed / 100) % 1
+			if (hasParticles && activeFlows.length > 0) {
+				for (let i = 0; i < activeFlows.length; i++) {
+					const flow = activeFlows[i]
+					const t = (time / 1600 + flow.seed) % 1
 					const invT = 1 - t
-					const px = invT * invT * line.sx + 2 * invT * t * line.midX + t * t * line.tx
-					const py = invT * invT * line.sy + 2 * invT * t * line.midY + t * t * line.ty
+					const px = invT * invT * flow.sx + 2 * invT * t * flow.midX + t * t * flow.tx
+					const py = invT * invT * flow.sy + 2 * invT * t * flow.midY + t * t * flow.ty
 
-					// Glowing head
+					// White photon head with flow color halo
 					ctx.fillStyle = "#ffffff"
 					ctx.beginPath()
-					ctx.arc(px, py, Math.max(1.8 / zoom, 1.0), 0, Math.PI * 2)
+					ctx.arc(px, py, Math.max(1.6 / zoom, 0.9), 0, Math.PI * 2)
 					ctx.fill()
 				}
 			}
 
-			// Cluster spokes & Satellite Nodes
-			if (isDispersed) {
-				// Draw spiderfy connector spokes from cluster center to satellites
-				for (const cluster of clusterList) {
-					if (cluster.items.length > 1) {
-						ctx.strokeStyle = "rgba(255, 255, 255, 0.18)"
-						ctx.lineWidth = 0.6 / zoom
-						for (const item of cluster.items) {
-							if (item.dispX != null && item.dispY != null) {
-								ctx.beginPath()
-								ctx.moveTo(cluster.basePos[0], cluster.basePos[1])
-								ctx.lineTo(item.dispX, item.dispY)
-								ctx.stroke()
-							}
-						}
-						// Small central hub dot
-						ctx.fillStyle = "rgba(255, 255, 255, 0.45)"
-						ctx.beginPath()
-						ctx.arc(cluster.basePos[0], cluster.basePos[1], 1.8 / zoom, 0, Math.PI * 2)
-						ctx.fill()
-					}
-				}
+			// Hotspot Nodes (City Energy Hubs)
+			for (const h of hotspots) {
+				const baseR = Math.min(2.4 + Math.log2(h.totalHits + 1) * 0.75, 7.0) / zoom
 
-				// Draw dispersed individual satellite dots
-				for (const line of lines) {
-					const r = Math.max(line.radius / zoom, 1.4 / zoom)
-
-					// High frequency halo
-					if (line.item.count >= 10 && hasGrid) {
-						ctx.fillStyle = line.color
-						ctx.globalAlpha = 0.2
-						ctx.beginPath()
-						ctx.arc(line.sx, line.sy, r * 2.2, 0, Math.PI * 2)
-						ctx.fill()
-						ctx.globalAlpha = 1.0
-					}
-
-					// Center Dot
-					ctx.fillStyle = line.color
+				// Outer energy halo
+				if ((hasPulse || h.totalHits >= 5) && hasGrid) {
+					const pulseAdd = hasPulse ? Math.sin(time / 350 + h.lat) * 0.5 : 0
+					const haloR = baseR * (1.6 + Math.min(h.uniqueIps.size, 8) * 0.08) + pulseAdd / zoom
+					ctx.fillStyle = h.primaryColor
+					ctx.globalAlpha = 0.22
 					ctx.beginPath()
-					ctx.arc(line.sx, line.sy, r, 0, Math.PI * 2)
+					ctx.arc(h.pos[0], h.pos[1], Math.max(2 / zoom, haloR), 0, Math.PI * 2)
 					ctx.fill()
-
-					// LOD Level 1 (Zoom >= 1.8): Display Country Code Badge
-					if (line.item.country) {
-						ctx.font = `600 ${Math.max(8 / zoom, 5)}px monospace`
-						ctx.fillStyle = "rgba(255,255,255,0.75)"
-						ctx.fillText(line.item.country, line.sx + r + 2 / zoom, line.sy + 2.5 / zoom)
-					}
-
-					// LOD Level 2 (Zoom >= 3.2): Display Masked IP
-					if (zoom >= 3.2) {
-						ctx.font = `${Math.max(7 / zoom, 4.5)}px sans-serif`
-						ctx.fillStyle = "rgba(255,255,255,0.45)"
-						ctx.fillText(line.item.ip, line.sx + r + 2 / zoom, line.sy + 10 / zoom)
-					}
+					ctx.globalAlpha = 1.0
 				}
-			} else {
-				// Zoom < 2.0: Aggregated Cluster rendering
-				for (const cluster of clusterList) {
-					const n = cluster.items.length
-					const primaryColor = cluster.items[0]?.color || "#3b82f6"
 
-					if (n > 1) {
-						// Multi-IP aggregated cluster
-						const r = Math.min(3.5 + Math.log2(cluster.totalHits + 1) * 0.6 + Math.min(n, 10) * 0.4, 8.5) / zoom
+				// Core dot
+				ctx.fillStyle = h.primaryColor
+				ctx.beginPath()
+				ctx.arc(h.pos[0], h.pos[1], baseR, 0, Math.PI * 2)
+				ctx.fill()
 
-						// Cluster Glow
-						ctx.fillStyle = primaryColor
-						ctx.globalAlpha = 0.25
-						ctx.beginPath()
-						ctx.arc(cluster.basePos[0], cluster.basePos[1], r * 1.8, 0, Math.PI * 2)
-						ctx.fill()
-						ctx.globalAlpha = 1.0
-
-						// Cluster Core Dot
-						ctx.fillStyle = primaryColor
-						ctx.beginPath()
-						ctx.arc(cluster.basePos[0], cluster.basePos[1], r, 0, Math.PI * 2)
-						ctx.fill()
-
-						// Cluster Count Badge (if zoom >= 1.2)
-						if (zoom >= 1.2) {
-							ctx.font = `bold ${Math.max(7.5 / zoom, 5)}px monospace`
-							ctx.fillStyle = "#ffffff"
-							const label = cluster.country ? `${cluster.country} [${n}]` : `[${n}]`
-							ctx.fillText(label, cluster.basePos[0] + r + 2 / zoom, cluster.basePos[1] + 2.5 / zoom)
-						}
-					} else {
-						// Single IP node
-						const item = cluster.items[0]
-						const r = Math.max(2.2 / zoom, 1.4 / zoom)
-
-						if (item.count >= 10 && hasGrid) {
-							ctx.fillStyle = item.color
-							ctx.globalAlpha = 0.2
-							ctx.beginPath()
-							ctx.arc(cluster.basePos[0], cluster.basePos[1], r * 2.2, 0, Math.PI * 2)
-							ctx.fill()
-							ctx.globalAlpha = 1.0
-						}
-
-						ctx.fillStyle = item.color
-						ctx.beginPath()
-						ctx.arc(cluster.basePos[0], cluster.basePos[1], r, 0, Math.PI * 2)
-						ctx.fill()
-
-						if (zoom >= 1.8 && item.country) {
-							ctx.font = `600 ${Math.max(8 / zoom, 5)}px monospace`
-							ctx.fillStyle = "rgba(255,255,255,0.75)"
-							ctx.fillText(item.country, cluster.basePos[0] + r + 2 / zoom, cluster.basePos[1] + 2.5 / zoom)
-						}
-					}
+				// Center bright dot for high-volume hotspots
+				if (h.totalHits >= 10) {
+					ctx.fillStyle = "#ffffff"
+					ctx.beginPath()
+					ctx.arc(h.pos[0], h.pos[1], Math.max(0.8 / zoom, 0.5), 0, Math.PI * 2)
+					ctx.fill()
 				}
 			}
 
-			// Machine Target Markers
+			// Machine Target Markers (Our Servers)
 			for (const m of machines) {
 				if (m.lat != null && m.lon != null) {
 					const pos = projection([m.lon, m.lat])
@@ -761,23 +654,85 @@ function AttackMap({
 					ctx.beginPath()
 					ctx.arc(x, y, dotR, 0, Math.PI * 2)
 					ctx.fill()
+				}
+			}
 
-					// Label (with City on LOD 1)
-					const labelText = zoom >= 1.8 && m.city ? `${m.name || m.id} · ${m.city}` : m.name || m.id
-					ctx.fillStyle = isSelected
-						? "rgba(255,255,255,0.95)"
-						: isDim
-						? "rgba(255,255,255,0.3)"
-						: "rgba(255,255,255,0.75)"
-					ctx.font = `${isSelected ? "bold " : ""}${Math.max(10 / zoom, 6)}px sans-serif`
-					ctx.fillText(labelText, x + dotR + 3 / zoom, y + 3.5 / zoom)
+			// Text Labels with Collision Detection (Occlusion Culling)
+			// Guarantees absolute ZERO overlapping text
+			const occupiedBoxes: Array<{ x1: number; y1: number; x2: number; y2: number }> = []
+			const canPlace = (x: number, y: number, w: number, h: number) => {
+				const pad = 3 / zoom
+				const x1 = x - pad
+				const y1 = y - pad
+				const x2 = x + w + pad
+				const y2 = y + h + pad
+				for (const b of occupiedBoxes) {
+					if (!(x2 < b.x1 || x1 > b.x2 || y2 < b.y1 || y1 > b.y2)) {
+						return false
+					}
+				}
+				occupiedBoxes.push({ x1, y1, x2, y2 })
+				return true
+			}
+
+			// 1. Render Machine Labels (Highest Priority)
+			for (const m of machines) {
+				if (m.lat != null && m.lon != null) {
+					const pos = projection([m.lon, m.lat])
+					if (!pos) continue
+					const isSelected = selectedMachineId ? m.name === selectedMachineId || m.id === selectedMachineId : false
+					const isAll = !selectedMachineId
+					const isDim = !isAll && !isSelected
+
+					const dotR = (isSelected ? 4.5 : 3.5) / zoom
+					const text = zoom >= 1.6 && m.city ? `${m.name || m.id} · ${m.city}` : m.name || m.id
+					const fontSize = Math.max(9.5 / zoom, 5.5)
+					ctx.font = `${isSelected ? "bold " : "600 "}${fontSize}px sans-serif`
+
+					const textW = ctx.measureText(text).width
+					const lx = pos[0] + dotR + 3 / zoom
+					const ly = pos[1] + 3 / zoom
+
+					if (canPlace(lx, ly - fontSize, textW, fontSize)) {
+						ctx.fillStyle = isSelected
+							? "#06b6d4"
+							: isDim
+							? "rgba(255,255,255,0.3)"
+							: "rgba(255,255,255,0.85)"
+						ctx.fillText(text, lx, ly)
+					}
+				}
+			}
+
+			// 2. Render Hotspot City/Country Labels (When zoom >= 1.5x, sorted by volume)
+			if (zoom >= 1.5) {
+				const sortedHotspots = [...hotspots].sort((a, b) => b.totalHits - a.totalHits)
+				for (const h of sortedHotspots) {
+					const baseR = Math.min(2.4 + Math.log2(h.totalHits + 1) * 0.75, 7.0) / zoom
+					const text = h.city
+						? zoom >= 2.0
+							? `${h.city} (${h.totalHits})`
+							: h.city
+						: h.country || ""
+					if (!text) continue
+
+					const fontSize = Math.max(8.0 / zoom, 4.5)
+					ctx.font = `500 ${fontSize}px sans-serif`
+					const textW = ctx.measureText(text).width
+					const lx = h.pos[0] + baseR + 2.5 / zoom
+					const ly = h.pos[1] + 2.5 / zoom
+
+					if (canPlace(lx, ly - fontSize, textW, fontSize)) {
+						ctx.fillStyle = "rgba(255, 255, 255, 0.75)"
+						ctx.fillText(text, lx, ly)
+					}
 				}
 			}
 
 			ctx.restore()
 		}
 
-		// Animation frame loop for Level 2/3, else single static draw
+		// Animation loop if level >= 2, else single frame
 		let animId: number
 		if (hasPulse || hasParticles) {
 			const renderLoop = (time: number) => {
@@ -796,7 +751,7 @@ function AttackMap({
 
 	// Mouse down: start dragging
 	const handleMouseDown = (e: React.MouseEvent) => {
-		if (e.button !== 0) return // left click only
+		if (e.button !== 0) return
 		setIsDragging(true)
 		dragStartRef.current = {
 			x: e.clientX,
@@ -823,7 +778,7 @@ function AttackMap({
 			return
 		}
 
-		// Hit-test when not dragging
+		// Hit-test when hovering
 		const container = containerRef.current
 		if (!container || !worldData) return
 		const rect = container.getBoundingClientRect()
@@ -834,7 +789,7 @@ function AttackMap({
 		const height = rect.height
 		const projection = geoEqualEarth().fitSize([width, height], { type: "Sphere" })
 
-		// Check machine markers first
+		// Check machine markers
 		for (const m of machines) {
 			if (m.lat != null && m.lon != null) {
 				const pos = projection([m.lon, m.lat])
@@ -860,139 +815,74 @@ function AttackMap({
 			}
 		}
 
-		// Check trajectory source points / clusters
-		const isDispersed = zoom >= 2.0
+		// Check Hotspot markers
 		const raw: any[] = mapMode === "attackers" ? events : bans
-		const items = raw.filter((item) => item.lat != null && item.lon != null)
+		const validItems = raw.filter(
+			(it) => it.lat != null && it.lon != null && it.event_type !== "unban" && it.event_type !== "auth_success"
+		)
 
-		// Group into clusters
-		type HitCluster = {
-			key: string
-			basePos: [number, number]
-			items: any[]
-			totalHits: number
+		// Aggregate into hotspots for hit-testing
+		const hotspotsMap: Record<string, {
+			lat: number
+			lon: number
+			pos: [number, number]
 			country: string | null
-		}
-		const hitClusters: Record<string, HitCluster> = {}
-		for (const it of items) {
+			city: string | null
+			uniqueIps: Set<string>
+			totalHits: number
+			targets: Set<string>
+			mainTypes: Record<string, number>
+		}> = {}
+
+		for (const it of validItems) {
 			const itLat = Number(it.lat)
 			const itLon = Number(it.lon)
 			const k = `${itLat.toFixed(2)},${itLon.toFixed(2)}`
-			if (!hitClusters[k]) {
-				const basePos = projection([itLon, itLat])
-				if (!basePos) continue
-				hitClusters[k] = {
-					key: k,
-					basePos,
-					items: [],
-					totalHits: 0,
+			if (!hotspotsMap[k]) {
+				const pos = projection([itLon, itLat])
+				if (!pos) continue
+				hotspotsMap[k] = {
+					lat: itLat,
+					lon: itLon,
+					pos,
 					country: it.country || null,
+					city: it.city || null,
+					uniqueIps: new Set(),
+					totalHits: 0,
+					targets: new Set(),
+					mainTypes: {},
 				}
 			}
-			hitClusters[k].items.push(it)
-			hitClusters[k].totalHits += Number(it.count || it.ban_count || 1)
+			const h = hotspotsMap[k]
+			const ip = it.ip || it.src_ip
+			if (ip) h.uniqueIps.add(ip)
+			const count = Number(it.count || it.ban_count || 1)
+			h.totalHits += count
+			if (it.machine_id) h.targets.add(it.machine_id)
+			const t = it.event_type || it.jail || "attack"
+			h.mainTypes[t] = (h.mainTypes[t] || 0) + count
 		}
 
-		if (!isDispersed) {
-			// Zoom < 2.0: Hit test against cluster centers
-			for (const cluster of Object.values(hitClusters)) {
-				const sx = cluster.basePos[0] * zoom + pan.x
-				const sy = cluster.basePos[1] * zoom + pan.y
-				const hitRadius = cluster.items.length > 1 ? 14 : 9
-
-				if (Math.hypot(mouseX - sx, mouseY - sy) <= hitRadius) {
-					const isBan = mapMode === "bans"
-					if (cluster.items.length > 1) {
-						// Multi-IP Cluster Tooltip
-						const topIps = cluster.items
-							.slice(0, 3)
-							.map((it) => `${it.ip || it.src_ip} (×${it.count || it.ban_count || 1})`)
-							.join(", ")
-						setHovered({
-							type: "source",
-							title: `📍 ${cluster.country || "Cluster"} (${cluster.items.length} IPs)`,
-							subtitle: `${cluster.totalHits} events from this location`,
-							badge: `${cluster.items.length} ${isBan ? "Bans" : "Attackers"}`,
-							badgeColor: "bg-primary/20 text-primary border-primary/30",
-							details: [
-								{ label: "Top IPs", val: topIps },
-								{ label: "Hint", val: "Zoom in (≥2.0x) to expand orbit" },
-							],
-							x: mouseX,
-							y: mouseY,
-						})
-					} else {
-						// Single IP Tooltip
-						const item = cluster.items[0]
-						const ip = item.ip || item.src_ip
-						const machineId = item.machine_id
-						const type = item.event_type || item.jail
-						const count = item.count || item.ban_count || 1
-						const ts = item.ts || item.banned_at
-						setHovered({
-							type: "source",
-							title: ip,
-							subtitle: [cluster.country, item.city].filter(Boolean).join(" · ") || cluster.country || "Unknown Location",
-							badge: isBan ? `Banned: ${type}` : type,
-							badgeColor: isBan ? "bg-red-500/20 text-red-400 border-red-500/30" : "bg-amber-500/20 text-amber-400 border-amber-500/30",
-							details: [
-								{ label: "Target", val: machineId || "All" },
-								{ label: "Hits", val: `× ${count}` },
-								{ label: "Time", val: ts ? new Date(ts).toLocaleTimeString() : "Recent" },
-							],
-							x: mouseX,
-							y: mouseY,
-						})
-					}
-					return
-				}
-			}
-		} else {
-			// Zoom >= 2.0: Hit test against dispersed satellite coordinates
-			for (const cluster of Object.values(hitClusters)) {
-				const n = cluster.items.length
-				const tExp = Math.min(1.0, (zoom - 2.0) / 0.5)
-				const orbitScreenR = (16 + Math.min(n, 16) * 1.8) * tExp
-				const orbitWorldR = orbitScreenR / zoom
-
-				for (let i = 0; i < n; i++) {
-					const item = cluster.items[i]
-					let dispX = cluster.basePos[0]
-					let dispY = cluster.basePos[1]
-					if (n > 1) {
-						const angle = (2 * Math.PI * i) / n - Math.PI / 2
-						dispX += Math.cos(angle) * orbitWorldR
-						dispY += Math.sin(angle) * orbitWorldR
-					}
-
-					const sx = dispX * zoom + pan.x
-					const sy = dispY * zoom + pan.y
-
-					if (Math.hypot(mouseX - sx, mouseY - sy) <= 10) {
-						const isBan = mapMode === "bans"
-						const ip = item.ip || item.src_ip
-						const country = item.country || cluster.country
-						const machineId = item.machine_id
-						const type = item.event_type || item.jail
-						const count = item.count || item.ban_count || 1
-						const ts = item.ts || item.banned_at
-						setHovered({
-							type: "source",
-							title: ip,
-							subtitle: [country, item.city].filter(Boolean).join(" · ") || country || "Unknown Location",
-							badge: isBan ? `Banned: ${type}` : type,
-							badgeColor: isBan ? "bg-red-500/20 text-red-400 border-red-500/30" : "bg-amber-500/20 text-amber-400 border-amber-500/30",
-							details: [
-								{ label: "Target", val: machineId || "All" },
-								{ label: "Hits", val: `× ${count}` },
-								{ label: "Time", val: ts ? new Date(ts).toLocaleTimeString() : "Recent" },
-							],
-							x: mouseX,
-							y: mouseY,
-						})
-						return
-					}
-				}
+		for (const h of Object.values(hotspotsMap)) {
+			const sx = h.pos[0] * zoom + pan.x
+			const sy = h.pos[1] * zoom + pan.y
+			if (Math.hypot(mouseX - sx, mouseY - sy) <= 12) {
+				const isBan = mapMode === "bans"
+				const topType = Object.entries(h.mainTypes).sort((a, b) => b[1] - a[1])[0]?.[0] || "threat"
+				setHovered({
+					type: "hotspot",
+					title: h.city ? `${h.city}, ${h.country}` : h.country || "Attack Hotspot",
+					subtitle: `${h.uniqueIps.size} unique source IPs in this city`,
+					badge: isBan ? `Banned: ${topType}` : topType,
+					badgeColor: isBan ? "bg-red-500/20 text-red-400 border-red-500/30" : "bg-amber-500/20 text-amber-400 border-amber-500/30",
+					details: [
+						{ label: "Total Hits", val: `× ${h.totalHits}` },
+						{ label: "Target", val: Array.from(h.targets).join(", ") || "All" },
+					],
+					x: mouseX,
+					y: mouseY,
+				})
+				return
 			}
 		}
 
