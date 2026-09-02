@@ -395,13 +395,14 @@ function AttackMap({
 			if (!hotspotsMap[k]) {
 				const pos = projection([itLon, itLat])
 				if (!pos) continue
+				const cityName = it.city || (it as any).asn || null
 				hotspotsMap[k] = {
 					key: k,
 					lat: itLat,
 					lon: itLon,
 					pos,
 					country: it.country || null,
-					city: it.city || null,
+					city: cityName,
 					uniqueIps: new Set(),
 					totalHits: 0,
 					targetMachines: {},
@@ -841,12 +842,13 @@ function AttackMap({
 			if (!hotspotsMap[k]) {
 				const pos = projection([itLon, itLat])
 				if (!pos) continue
+				const cityName = it.city || (it as any).asn || null
 				hotspotsMap[k] = {
 					lat: itLat,
 					lon: itLon,
 					pos,
 					country: it.country || null,
-					city: it.city || null,
+					city: cityName,
 					uniqueIps: new Set(),
 					totalHits: 0,
 					targets: new Set(),

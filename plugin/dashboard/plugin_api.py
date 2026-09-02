@@ -397,7 +397,7 @@ async def security_bans_current(
         ).fetchone()[0]
 
         rows = conn.execute(
-            f"SELECT b.*, g.country, g.lat, g.lon FROM security_bans b "
+            f"SELECT b.*, g.country, g.asn as city, g.lat, g.lon FROM security_bans b "
             f"LEFT JOIN geo_cache g ON b.ip = g.ip "
             f"WHERE {where} "
             f"ORDER BY {order} LIMIT ? OFFSET ?",
