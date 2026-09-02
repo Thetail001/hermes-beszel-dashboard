@@ -451,13 +451,11 @@ async def security_bans_current(
 
 
 @router.get("/security/stats/summary")
-async def security_stats_summary(period: str = "all", machine_id: str = ""):
-    """All-time aggregate stats for the dashboard snapshot cards.
+async def security_stats_summary(machine_id: str = ""):
+    """All-time aggregate stats for the three snapshot cards.
 
-    The three snapshot cards (Active Bans / All-time Unique IPs /
-    All-time Event Types) are all-time by design; time-window analysis moved
-    to /security/stats/timeseries. `period` is kept for backward compatibility
-    but no longer narrows the window.
+    Returns active_bans / unique_ips / by_type plus the GeoIP DB status.
+    All-time by design — time-window analysis lives in /security/stats/timeseries.
 
     machine_id: optional per-machine filter (empty = all machines).
     """
@@ -465,9 +463,6 @@ async def security_stats_summary(period: str = "all", machine_id: str = ""):
     mparam = [machine_id] if machine_id else []
     conn = _sec_db()
     try:
-        total = conn.execute(
-            "SELECT COUNT(*) FROM security_events WHERE 1=1" + mcond, mparam
-        ).fetchone()[0]
         bans = conn.execute(
             "SELECT COUNT(*) FROM security_bans WHERE unbanned_at IS NULL" + mcond,
             mparam,
@@ -484,21 +479,10 @@ async def security_stats_summary(period: str = "all", machine_id: str = ""):
                 mparam,
             )
         }
-        by_jail = {
-            r[0]: r[1]
-            for r in conn.execute(
-                "SELECT jail, COUNT(*) FROM security_events WHERE jail IS NOT NULL "
-                + mcond + " GROUP BY jail",
-                mparam,
-            )
-        }
         return {
-            "period": "all",
-            "total_events": total,
             "active_bans": bans,
             "unique_ips": ips,
             "by_type": by_type,
-            "by_jail": by_jail,
             "geoip": _get_geo_status(),
         }
     finally:

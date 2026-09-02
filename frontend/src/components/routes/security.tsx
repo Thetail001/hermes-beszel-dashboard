@@ -49,12 +49,9 @@ interface Ban {
 }
 
 interface Summary {
-	period: string
-	total_events: number
 	active_bans: number
 	unique_ips: number
 	by_type: Record<string, number>
-	by_jail: Record<string, number>
 	geoip?: {
 		database_type?: string
 		build_month?: string
@@ -1483,9 +1480,11 @@ export default function SecurityPage() {
 		}
 		const qs = buildQueryString(filter)
 		const offset = (page - 1) * pageSize
+		// summary only reads machine_id — don't leak the attackers filter into it
+		const smQ = filter.machine_id ? `machine_id=${encodeURIComponent(filter.machine_id)}` : ""
 		Promise.all([
 			fetch(`/api/plugins/beszel/security/attackers?${qs}&limit=${pageSize}&offset=${offset}`).then((r) => r.json()),
-			fetch(`/api/plugins/beszel/security/stats/summary?${qs}`).then((r) => r.json()),
+			fetch(`/api/plugins/beszel/security/stats/summary?${smQ}`).then((r) => r.json()),
 			fetch("/api/plugins/beszel/security/machines").then((r) => r.json()),
 		])
 			.then(([at, sm, mc]) => {
