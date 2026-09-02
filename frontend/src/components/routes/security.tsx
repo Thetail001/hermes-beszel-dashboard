@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Switch } from "@/components/ui/switch"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
 import { geoEqualEarth, geoPath } from "d3-geo"
@@ -227,11 +226,16 @@ function DensitySparkline({ events }: { events: SecurityEvent[] }) {
 }
 
 /** Attack Map: Canvas-based world map with attack trajectories */
-function AttackMap({ events, machines, effectLevel, fusionMode }: {
+function AttackMap({
+	events,
+	machines,
+	effectLevel,
+	selectedMachineId,
+}: {
 	events: SecurityEvent[]
 	machines: Machine[]
 	effectLevel: number
-	fusionMode: boolean
+	selectedMachineId?: string
 }) {
 	const canvasRef = useRef<HTMLCanvasElement>(null)
 	const containerRef = useRef<HTMLDivElement>(null)
@@ -256,11 +260,12 @@ function AttackMap({ events, machines, effectLevel, fusionMode }: {
 
 		// Resize canvas to container
 		const rect = container.getBoundingClientRect()
-		canvas.width = rect.width * devicePixelRatio
-		canvas.height = rect.height * devicePixelRatio
+		const dpr = window.devicePixelRatio || 1
+		canvas.width = rect.width * dpr
+		canvas.height = rect.height * dpr
 		canvas.style.width = `${rect.width}px`
 		canvas.style.height = `${rect.height}px`
-		ctx.scale(devicePixelRatio, devicePixelRatio)
+		ctx.scale(dpr, dpr)
 
 		const width = rect.width
 		const height = rect.height
@@ -268,175 +273,216 @@ function AttackMap({ events, machines, effectLevel, fusionMode }: {
 		// Projection
 		const projection = geoEqualEarth().fitSize([width, height], { type: "Sphere" })
 		const path = geoPath(projection, ctx)
-
-		// Clear
-		ctx.clearRect(0, 0, width, height)
-
-		// Background
-		ctx.fillStyle = "#0a0a0f"
-		ctx.fillRect(0, 0, width, height)
-
-		// Graticule (subtle grid)
-		if (effectLevel >= 2) {
-			ctx.strokeStyle = "rgba(255,255,255,0.03)"
-			ctx.lineWidth = 0.5
-			const graticule = { type: "LineString", coordinates: [] as any[] }
-			for (let lon = -180; lon <= 180; lon += 30) {
-				graticule.coordinates = [[lon, -90], [lon, 90]]
-				ctx.beginPath()
-				path(graticule as any)
-				ctx.stroke()
-			}
-			for (let lat = -60; lat <= 60; lat += 30) {
-				graticule.coordinates = [[-180, lat], [180, lat]]
-				ctx.beginPath()
-				path(graticule as any)
-				ctx.stroke()
-			}
-		}
-
-		// Countries
 		const countries = feature(worldData, worldData.objects.countries) as any
-		ctx.fillStyle = "rgba(255,255,255,0.04)"
-		ctx.strokeStyle = "rgba(255,255,255,0.08)"
-		ctx.lineWidth = 0.5
-		for (const c of countries.features) {
-			ctx.beginPath()
-			path(c)
-			ctx.fill()
-			ctx.stroke()
-		}
 
-		// Machine markers
+		// Machine markers: map both PB ID and machine name -> canvas [x, y]
 		const machinePositions: Record<string, [number, number]> = {}
 		for (const m of machines) {
-			if (m.lat && m.lon) {
-				const [x, y] = projection([m.lon, m.lat]) || [0, 0]
-				machinePositions[m.id] = [x, y]
-
-				// Glow effect
-				if (effectLevel >= 3) {
-					const gradient = ctx.createRadialGradient(x, y, 0, x, y, 20)
-					gradient.addColorStop(0, "rgba(34,197,94,0.3)")
-					gradient.addColorStop(1, "transparent")
-					ctx.fillStyle = gradient
-					ctx.fillRect(x - 20, y - 20, 40, 40)
+			if (m.lat != null && m.lon != null) {
+				const pos = projection([m.lon, m.lat])
+				if (pos) {
+					if (m.id) machinePositions[m.id] = pos
+					if (m.name) machinePositions[m.name] = pos
 				}
-
-				// Dot
-				ctx.fillStyle = "#22c55e"
-				ctx.beginPath()
-				ctx.arc(x, y, 4, 0, Math.PI * 2)
-				ctx.fill()
-
-				// Pulse ring
-				if (effectLevel >= 2) {
-					ctx.strokeStyle = "rgba(34,197,94,0.4)"
-					ctx.lineWidth = 1
-					ctx.beginPath()
-					ctx.arc(x, y, 8 + Math.sin(Date.now() / 500) * 2, 0, Math.PI * 2)
-					ctx.stroke()
-				}
-
-				// Label
-				ctx.fillStyle = "rgba(255,255,255,0.6)"
-				ctx.font = "10px sans-serif"
-				ctx.fillText(m.name, x + 8, y + 4)
 			}
 		}
 
-		// Attack trajectories (recent events with GeoIP)
-		// Performance: object pool for line coordinates, batch rendering
-		const attackEvents = events
-			.filter((ev) => ev.lat && ev.lon && ev.event_type !== "unban" && ev.event_type !== "auth_success")
-			.slice(0, effectLevel >= 3 ? 50 : 20)
+		// Fallback target position if an event has an unmapped machine_id
+		const defaultTargetPos: [number, number] =
+			(selectedMachineId && machinePositions[selectedMachineId]) ||
+			(machines[0]?.id && machinePositions[machines[0].id]) ||
+			(machines[0]?.name && machinePositions[machines[0].name]) ||
+			[width / 2, height / 2]
 
-		// Pre-calculate all line coordinates
+		// Filter attack events with GeoIP
+		const attackEvents = events
+			.filter((ev) => ev.lat != null && ev.lon != null && ev.event_type !== "unban" && ev.event_type !== "auth_success")
+			.slice(0, effectLevel >= 3 ? 50 : 25)
+
+		// Pre-calculate line trajectories
 		const lines: Array<{
-			sx: number; sy: number; tx: number; ty: number
-			midX: number; midY: number; color: string; width: number
+			sx: number
+			sy: number
+			tx: number
+			ty: number
+			midX: number
+			midY: number
+			color: string
+			width: number
+			seed: number
 		}> = []
 
 		for (const ev of attackEvents) {
-			const [sx, sy] = projection([ev.lon!, ev.lat!]) || [0, 0]
-			const targetId = fusionMode ? Object.keys(machinePositions)[0] : machines[0]?.id
-			const [tx, ty] = targetId ? machinePositions[targetId] || [width / 2, height / 2] : [width / 2, height / 2]
+			const sourcePos = projection([ev.lon!, ev.lat!])
+			if (!sourcePos) continue
+			const [sx, sy] = sourcePos
 
-			const dist = Math.sqrt((tx - sx) ** 2 + (ty - sy) ** 2)
-			const curvature = Math.min(dist * 0.3, 80)
-			const midX = (sx + tx) / 2 + (Math.random() - 0.5) * curvature
-			const midY = (sy + ty) / 2 - curvature * 0.5
+			const targetPos = (ev.machine_id && machinePositions[ev.machine_id]) || defaultTargetPos
+			const [tx, ty] = targetPos
+
+			const dist = Math.hypot(tx - sx, ty - sy)
+			// Deterministic pseudo-random factor based on event id and IP string
+			const seed = Math.abs(((ev.id || 1) * 37 + (ev.src_ip ? ev.src_ip.charCodeAt(0) * 19 : 0)) % 100)
+			const curveFactor = seed / 100 - 0.5 // -0.5 to 0.5
+			const curvature = Math.min(dist * 0.25, 70)
+			const midX = (sx + tx) / 2 + curveFactor * curvature
+			const midY = (sy + ty) / 2 - curvature * 0.6 // arch upward
 
 			lines.push({
-				sx, sy, tx, ty, midX, midY,
-				color: TYPE_COLORS[ev.event_type] || "#666",
-				width: effectLevel >= 3 ? 2 : 1,
+				sx,
+				sy,
+				tx,
+				ty,
+				midX,
+				midY,
+				color: TYPE_COLORS[ev.event_type] || "#3b82f6",
+				width: effectLevel >= 3 ? 1.5 : 1,
+				seed,
 			})
 		}
 
-		// Batch render lines
-		for (const line of lines) {
-			ctx.strokeStyle = line.color
-			ctx.lineWidth = line.width
-			ctx.globalAlpha = 0.6
-			ctx.beginPath()
-			ctx.moveTo(line.sx, line.sy)
-			ctx.quadraticCurveTo(line.midX, line.midY, line.tx, line.ty)
-			ctx.stroke()
-			ctx.globalAlpha = 1
+		const draw = (time: number) => {
+			ctx.clearRect(0, 0, width, height)
 
-			// Source dot
-			ctx.fillStyle = line.color
-			ctx.beginPath()
-			ctx.arc(line.sx, line.sy, 3, 0, Math.PI * 2)
-			ctx.fill()
-		}
+			// Background
+			ctx.fillStyle = "#0a0a0f"
+			ctx.fillRect(0, 0, width, height)
 
-		// Particle heads (Level 3 only, staggered)
-		if (effectLevel >= 3) {
-			const now = Date.now()
-			for (let i = 0; i < lines.length; i++) {
-				const line = lines[i]
-				const t = (now / 1000 + i * 0.15) % 1
-				const px = (1 - t) * (1 - t) * line.sx + 2 * (1 - t) * t * line.midX + t * t * line.tx
-				const py = (1 - t) * (1 - t) * line.sy + 2 * (1 - t) * t * line.midY + t * t * line.ty
-				ctx.fillStyle = "#fff"
-				ctx.beginPath()
-				ctx.arc(px, py, 2, 0, Math.PI * 2)
-				ctx.fill()
-			}
-		}
-
-		// Animation loop for Level 3 (with FPS adaptive degradation)
-		let animId: number
-		let frameCount = 0
-		let lastFpsCheck = Date.now()
-		let degraded = false
-
-		if (effectLevel >= 3) {
-			const animate = () => {
-				animId = requestAnimationFrame(animate)
-				frameCount++
-
-				// FPS check every 5 seconds
-				const now = Date.now()
-				if (now - lastFpsCheck >= 5000) {
-					const fps = frameCount / ((now - lastFpsCheck) / 1000)
-					if (fps < 45 && !degraded) {
-						degraded = true
-						console.warn("[AttackMap] FPS below 45, degrading effects")
-					}
-					frameCount = 0
-					lastFpsCheck = now
+			// Graticule (subtle grid)
+			if (effectLevel >= 2) {
+				ctx.strokeStyle = "rgba(255,255,255,0.03)"
+				ctx.lineWidth = 0.5
+				const graticule = { type: "LineString", coordinates: [] as any[] }
+				for (let lon = -180; lon <= 180; lon += 30) {
+					graticule.coordinates = [
+						[lon, -90],
+						[lon, 90],
+					]
+					ctx.beginPath()
+					path(graticule as any)
+					ctx.stroke()
+				}
+				for (let lat = -60; lat <= 60; lat += 30) {
+					graticule.coordinates = [
+						[-180, lat],
+						[180, lat],
+					]
+					ctx.beginPath()
+					path(graticule as any)
+					ctx.stroke()
 				}
 			}
-			animId = requestAnimationFrame(animate)
+
+			// Countries
+			ctx.fillStyle = "rgba(255,255,255,0.04)"
+			ctx.strokeStyle = "rgba(255,255,255,0.08)"
+			ctx.lineWidth = 0.5
+			for (const c of countries.features) {
+				ctx.beginPath()
+				path(c)
+				ctx.fill()
+				ctx.stroke()
+			}
+
+			// Attack trajectories (batch lines)
+			for (const line of lines) {
+				ctx.strokeStyle = line.color
+				ctx.lineWidth = line.width
+				ctx.globalAlpha = 0.5
+				ctx.beginPath()
+				ctx.moveTo(line.sx, line.sy)
+				ctx.quadraticCurveTo(line.midX, line.midY, line.tx, line.ty)
+				ctx.stroke()
+				ctx.globalAlpha = 1
+
+				// Source dot
+				ctx.fillStyle = line.color
+				ctx.beginPath()
+				ctx.arc(line.sx, line.sy, 2.5, 0, Math.PI * 2)
+				ctx.fill()
+			}
+
+			// Particle heads (Effect level 3: moving photons along bezier curves)
+			if (effectLevel >= 3 && lines.length > 0) {
+				for (let i = 0; i < lines.length; i++) {
+					const line = lines[i]
+					const t = (time / 1500 + line.seed / 100) % 1
+					const invT = 1 - t
+					const px = invT * invT * line.sx + 2 * invT * t * line.midX + t * t * line.tx
+					const py = invT * invT * line.sy + 2 * invT * t * line.midY + t * t * line.ty
+
+					ctx.fillStyle = "#ffffff"
+					ctx.beginPath()
+					ctx.arc(px, py, 2, 0, Math.PI * 2)
+					ctx.fill()
+				}
+			}
+
+			// Machine target markers
+			for (const m of machines) {
+				if (m.lat != null && m.lon != null) {
+					const pos = projection([m.lon, m.lat])
+					if (!pos) continue
+					const [x, y] = pos
+
+					const isSelected = selectedMachineId ? m.name === selectedMachineId || m.id === selectedMachineId : false
+					const isAll = !selectedMachineId
+					const isDim = !isAll && !isSelected
+
+					// Glow gradient (active/selected nodes)
+					if (effectLevel >= 2 && !isDim) {
+						const gradient = ctx.createRadialGradient(x, y, 0, x, y, 20)
+						gradient.addColorStop(0, isSelected ? "rgba(6,182,212,0.35)" : "rgba(34,197,94,0.3)")
+						gradient.addColorStop(1, "transparent")
+						ctx.fillStyle = gradient
+						ctx.fillRect(x - 20, y - 20, 40, 40)
+					}
+
+					// Pulse ring (Level 2+ and active/selected)
+					if (effectLevel >= 2 && !isDim) {
+						const pulseOffset = (m.id.charCodeAt(0) || 0) * 10
+						const pulse = 7 + Math.sin((time + pulseOffset) / 400) * 2.5
+						ctx.strokeStyle = isSelected ? "rgba(6,182,212,0.6)" : "rgba(34,197,94,0.5)"
+						ctx.lineWidth = 1
+						ctx.beginPath()
+						ctx.arc(x, y, Math.max(2, pulse), 0, Math.PI * 2)
+						ctx.stroke()
+					}
+
+					// Machine node dot
+					ctx.fillStyle = isSelected ? "#06b6d4" : isDim ? "rgba(34,197,94,0.4)" : "#22c55e"
+					ctx.beginPath()
+					ctx.arc(x, y, isSelected ? 4.5 : 3.5, 0, Math.PI * 2)
+					ctx.fill()
+
+					// Label
+					ctx.fillStyle = isSelected
+						? "rgba(255,255,255,0.95)"
+						: isDim
+						? "rgba(255,255,255,0.3)"
+						: "rgba(255,255,255,0.7)"
+					ctx.font = isSelected ? "bold 11px sans-serif" : "10px sans-serif"
+					ctx.fillText(m.name || m.id, x + 8, y + 4)
+				}
+			}
+		}
+
+		// Animation loop if level >= 2, else single frame
+		let animId: number
+		if (effectLevel >= 2) {
+			const renderLoop = (time: number) => {
+				draw(time)
+				animId = requestAnimationFrame(renderLoop)
+			}
+			animId = requestAnimationFrame(renderLoop)
+		} else {
+			draw(0)
 		}
 
 		return () => {
 			if (animId) cancelAnimationFrame(animId)
 		}
-	}, [worldData, events, machines, effectLevel, fusionMode])
+	}, [worldData, events, machines, effectLevel, selectedMachineId])
 
 	return (
 		<div ref={containerRef} className="relative h-[400px] w-full overflow-hidden rounded-md border">
@@ -624,7 +670,6 @@ export default function SecurityPage() {
 
 	// View state
 	const [effectLevel, setEffectLevel] = useState(2)
-	const [fusionMode, setFusionMode] = useState(false)
 	const [refreshInterval, setRefreshInterval] = useState(30)
 
 	// Filter state
@@ -652,7 +697,6 @@ export default function SecurityPage() {
 			try {
 				const parsed = JSON.parse(saved)
 				if (parsed.effectLevel !== undefined) setEffectLevel(parsed.effectLevel)
-				if (parsed.fusionMode !== undefined) setFusionMode(parsed.fusionMode)
 				if (parsed.refreshInterval !== undefined) setRefreshInterval(parsed.refreshInterval)
 				if (parsed.filter) {
 					// migrate the old 'first_seen' sort key → 'newest'
@@ -668,9 +712,9 @@ export default function SecurityPage() {
 	useEffect(() => {
 		localStorage.setItem(
 			"beszel-security-view",
-			JSON.stringify({ effectLevel, fusionMode, refreshInterval, filter })
+			JSON.stringify({ effectLevel, refreshInterval, filter })
 		)
-	}, [effectLevel, fusionMode, refreshInterval, filter])
+	}, [effectLevel, refreshInterval, filter])
 
 	// Reset to page 1 whenever any filter changes (a new filter means a new
 	// result set — staying on page 5 of the old set would show stale/empty data).
@@ -851,10 +895,6 @@ export default function SecurityPage() {
 						</Button>
 					</div>
 					<div className="flex items-center gap-2">
-						<Label htmlFor="fusion" className="text-xs"><Trans>Fusion</Trans></Label>
-						<Switch id="fusion" checked={fusionMode} onCheckedChange={setFusionMode} />
-					</div>
-					<div className="flex items-center gap-2">
 						<Label className="text-xs"><Trans>Effects</Trans></Label>
 						<div className="flex gap-1">
 							{[0, 1, 2, 3].map((level) => (
@@ -918,7 +958,12 @@ export default function SecurityPage() {
 					<CardTitle><Trans>Attack Map</Trans></CardTitle>
 				</CardHeader>
 				<CardContent>
-					<AttackMap events={events} machines={machines} effectLevel={effectLevel} fusionMode={fusionMode} />
+					<AttackMap
+						events={events}
+						machines={machines}
+						effectLevel={effectLevel}
+						selectedMachineId={filter.machine_id}
+					/>
 				</CardContent>
 			</Card>
 

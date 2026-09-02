@@ -945,8 +945,8 @@ msgid "Full"
 msgstr "Penuh"
 
 #: src/components/routes/security.tsx
-msgid "Fusion"
-msgstr ""
+#~ msgid "Fusion"
+#~ msgstr ""
 
 #. Context: General settings
 #: src/components/routes/settings/general.tsx
