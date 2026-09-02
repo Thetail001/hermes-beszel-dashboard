@@ -685,11 +685,9 @@ function AttackMap({
 			}
 		}
 
-		// Density tiering: Level 0 (15 flows), Level 1 (35 flows), Level 2/3 (All flows)
-		let maxFlows = streamFlows.length
-		if (effectLevel === 0) maxFlows = 15
-		else if (effectLevel === 1) maxFlows = 35
-		const activeFlows = streamFlows.sort((a, b) => b.hits - a.hits).slice(0, maxFlows)
+		// Effects control animation only (0 = dots only, no trajectory lines);
+		// data volume is governed by the map's "show latest N" filter instead.
+		const activeFlows = effectLevel === 0 ? [] : [...streamFlows].sort((a, b) => b.hits - a.hits)
 
 		const hasGrid = effectLevel >= 1
 		const hasPulse = effectLevel >= 2
@@ -1421,6 +1419,10 @@ export default function SecurityPage() {
 	const [effectLevel, setEffectLevel] = useState(2)
 	const [refreshInterval, setRefreshInterval] = useState(30)
 
+	// Map-specific filter (independent of the attacker list)
+	const [mapPeriod, setMapPeriod] = useState("24h")
+	const [mapLimit, setMapLimit] = useState(1000)
+
 	// Filter state
 	const [filter, setFilter] = useState<FilterState>({
 		period: "7d",
@@ -1482,15 +1484,13 @@ export default function SecurityPage() {
 		const qs = buildQueryString(filter)
 		const offset = (page - 1) * pageSize
 		Promise.all([
-			fetch(`/api/plugins/beszel/security/events?limit=200&${qs}`).then((r) => r.json()),
 			fetch(`/api/plugins/beszel/security/attackers?${qs}&limit=${pageSize}&offset=${offset}`).then((r) => r.json()),
 			fetch(`/api/plugins/beszel/security/stats/summary?${qs}`).then((r) => r.json()),
 			fetch("/api/plugins/beszel/security/machines").then((r) => r.json()),
 		])
-			.then(([ev, at, sm, mc]) => {
+			.then(([at, sm, mc]) => {
 				// 过期响应（已有更新的请求发出）直接丢弃，避免旧数据覆盖新数据
 				if (seq !== fetchSeqRef.current) return
-				setEvents(ev.items || [])
 				setAttackers(at.items || [])
 				setAttackerTotal(at.total ?? (at.items || []).length)
 				setSummary(sm)
@@ -1536,11 +1536,23 @@ export default function SecurityPage() {
 			.catch(() => {})
 	}
 
-	// 自动刷新用 ref 调用最新版 fetchData/fetchBans，避免 setInterval 闭包捕获旧 filter（stale closure）。
+	// Map data source — independent of the attacker list filter.
+	const fetchMap = () => {
+		const p = new URLSearchParams({ period: mapPeriod, limit: String(mapLimit) })
+		if (filter.machine_id) p.set("machine_id", filter.machine_id)
+		fetch(`/api/plugins/beszel/security/events?${p}`)
+			.then((r) => r.json())
+			.then((d) => setEvents(d.items || []))
+			.catch(() => {})
+	}
+
+	// 自动刷新用 ref 调用最新版 fetchData/fetchBans/fetchMap，避免 setInterval 闭包捕获旧 filter（stale closure）。
 	const fetchDataRef = useRef(fetchData)
 	fetchDataRef.current = fetchData
 	const fetchBansRef = useRef(fetchBans)
 	fetchBansRef.current = fetchBans
+	const fetchMapRef = useRef(fetchMap)
+	fetchMapRef.current = fetchMap
 
 	// Initial load + filter changes
 	useEffect(() => {
@@ -1552,12 +1564,18 @@ export default function SecurityPage() {
 		fetchBans()
 	}, [bansFilter, bansPage, bansPageSize, filter.machine_id])
 
+	// Map: refetch on map filter (period/limit) or machine change
+	useEffect(() => {
+		fetchMap()
+	}, [mapPeriod, mapLimit, filter.machine_id])
+
 	// Auto-refresh polling
 	useEffect(() => {
 		if (refreshInterval <= 0) return
 		const id = setInterval(() => {
 			fetchDataRef.current(true) // silent：静默更新，不触发 loading，不打断浏览
 			fetchBansRef.current()
+			fetchMapRef.current()
 		}, refreshInterval * 1000)
 		return () => clearInterval(id)
 	}, [refreshInterval])
@@ -1677,9 +1695,9 @@ export default function SecurityPage() {
 
 			{/* Attack map */}
 			<Card>
-				<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-3">
-					<CardTitle><Trans>Attack Map</Trans></CardTitle>
-					<div className="flex items-center gap-3">
+				<CardHeader className="space-y-3">
+					<div className="flex items-center justify-between">
+						<CardTitle><Trans>Attack Map</Trans></CardTitle>
 						{summary?.geoip && (
 							<div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 px-2.5 py-1 rounded-md border">
 								<span
@@ -1701,6 +1719,38 @@ export default function SecurityPage() {
 								)}
 							</div>
 						)}
+					</div>
+					<div className="flex flex-wrap items-center gap-3 border-t pt-3">
+						<div className="flex items-center gap-2">
+							<Label className="text-xs">Period</Label>
+							<select
+								value={mapPeriod}
+								onChange={(e) => setMapPeriod(e.target.value)}
+								className="h-7 rounded-md border bg-background px-2 text-xs"
+							>
+								<option value="30m">30 min</option>
+								<option value="1h">1 hour</option>
+								<option value="6h">6 hours</option>
+								<option value="12h">12 hours</option>
+								<option value="24h">24 hours</option>
+								<option value="7d">7 days</option>
+								<option value="30d">30 days</option>
+							</select>
+						</div>
+						<div className="flex items-center gap-2">
+							<Label className="text-xs">Show</Label>
+							<select
+								value={mapLimit}
+								onChange={(e) => setMapLimit(Number(e.target.value))}
+								className="h-7 rounded-md border bg-background px-2 text-xs"
+							>
+								<option value={500}>500</option>
+								<option value={1000}>1000</option>
+								<option value={2000}>2000</option>
+								<option value={5000}>5000</option>
+							</select>
+							<span className="text-xs text-muted-foreground">latest</span>
+						</div>
 						<div className="flex items-center gap-2">
 							<Label className="text-xs"><Trans>Effects</Trans></Label>
 							<div className="flex gap-1">

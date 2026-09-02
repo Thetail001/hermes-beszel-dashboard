@@ -210,6 +210,11 @@ async def auto_auth():
 SEC_DB = Path(os.environ.get(
     "BESZEL_SEC_DB", str(PLUGIN_DATA_DIR / "security-events.db")))
 
+# Max rows the events endpoint returns in a single page. This caps the map's
+# "show latest N" dropdown; tune upward if attack volume grows (configurable
+# in one place rather than scattered literals).
+_MAX_EVENTS = 5000
+
 # Authoritative schema — the centre owns this database (agents push over HTTP
 # and never touch it). CREATE IF NOT EXISTS so every connect is idempotent and
 # a fresh deployment self-initialises. NB: asn column carries the city name
@@ -296,24 +301,26 @@ def _sec_db() -> sqlite3.Connection:
 
 @router.get("/security/events")
 async def security_events(
-    limit: int = 50,
+    limit: int = 1000,
     before: str = "",
     jail: str = "",
     ip: str = "",
     type: str = "",
     machine_id: str = "",
+    period: str = "all",
 ):
-    """Cursor-paginated security events.
+    """Cursor-paginated security events — map data source and IP timeline.
 
     Query params:
-      limit:      page size (max 200)
+      limit:      page size (max _MAX_EVENTS)
       before:     ISO timestamp cursor (events older than this)
       jail:       filter by fail2ban jail
       ip:         filter by source IP
       type:       filter by event_type (ban|unban|attack|scan)
       machine_id: filter by machine (empty = all machines)
+      period:     all (default) | 30m | 1h | 6h | 12h | 24h | 7d | 30d
     """
-    limit = min(limit, 200)
+    limit = min(max(limit, 1), _MAX_EVENTS)
     sql = """
         SELECT
             e.*,
@@ -340,6 +347,12 @@ async def security_events(
     if machine_id:
         sql += " AND e.machine_id = ?"
         params.append(machine_id)
+    # Time window — ts carries a timezone offset, so compare via julianday
+    # (naive string comparison mis-orders mixed +00:00/+08:00 timestamps).
+    hours = {"30m": 0.5, "1h": 1, "6h": 6, "12h": 12, "24h": 24, "7d": 168, "30d": 720}.get(period)
+    if hours:
+        sql += " AND julianday(e.ts) > julianday('now') - ?"
+        params.append(hours / 24.0)
     sql += " ORDER BY e.ts DESC LIMIT ?"
     params.append(limit)
 
