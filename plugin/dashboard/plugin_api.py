@@ -435,56 +435,165 @@ async def security_bans_current(
 
 
 @router.get("/security/stats/summary")
-async def security_stats_summary(period: str = "24h", machine_id: str = ""):
-    """Aggregate stats for dashboard cards.
+async def security_stats_summary(period: str = "all", machine_id: str = ""):
+    """All-time aggregate stats for the dashboard snapshot cards.
 
-    period: 24h | 7d | 30d
-    machine_id: optional per-machine filter (empty = all machines)
+    The three snapshot cards (Active Bans / All-time Unique IPs /
+    All-time Event Types) are all-time by design; time-window analysis moved
+    to /security/stats/timeseries. `period` is kept for backward compatibility
+    but no longer narrows the window.
+
+    machine_id: optional per-machine filter (empty = all machines).
     """
-    hours = {"24h": 24, "7d": 168, "30d": 720}.get(period, 24)
     mcond = " AND machine_id = ?" if machine_id else ""
     mparam = [machine_id] if machine_id else []
     conn = _sec_db()
     try:
         total = conn.execute(
-            "SELECT COUNT(*) FROM security_events "
-            "WHERE ts > datetime('now', ?)" + mcond,
-            (f"-{hours} hours", *mparam),
+            "SELECT COUNT(*) FROM security_events WHERE 1=1" + mcond, mparam
         ).fetchone()[0]
         bans = conn.execute(
             "SELECT COUNT(*) FROM security_bans WHERE unbanned_at IS NULL" + mcond,
             mparam,
         ).fetchone()[0]
         ips = conn.execute(
-            "SELECT COUNT(DISTINCT src_ip) FROM security_events "
-            "WHERE ts > datetime('now', ?)" + mcond,
-            (f"-{hours} hours", *mparam),
+            "SELECT COUNT(DISTINCT src_ip) FROM security_events WHERE 1=1" + mcond,
+            mparam,
         ).fetchone()[0]
         by_type = {
             r[0]: r[1]
             for r in conn.execute(
-                "SELECT event_type, COUNT(*) FROM security_events "
-                "WHERE ts > datetime('now', ?) " + mcond + " GROUP BY event_type",
-                (f"-{hours} hours", *mparam),
+                "SELECT event_type, COUNT(*) FROM security_events WHERE 1=1 "
+                + mcond + " GROUP BY event_type",
+                mparam,
             )
         }
         by_jail = {
             r[0]: r[1]
             for r in conn.execute(
-                "SELECT jail, COUNT(*) FROM security_events "
-                "WHERE ts > datetime('now', ?) AND jail IS NOT NULL " + mcond + " "
-                "GROUP BY jail",
-                (f"-{hours} hours", *mparam),
+                "SELECT jail, COUNT(*) FROM security_events WHERE jail IS NOT NULL "
+                + mcond + " GROUP BY jail",
+                mparam,
             )
         }
         return {
-            "period": period,
+            "period": "all",
             "total_events": total,
             "active_bans": bans,
             "unique_ips": ips,
             "by_type": by_type,
             "by_jail": by_jail,
             "geoip": _get_geo_status(),
+        }
+    finally:
+        conn.close()
+
+
+# Time-bucket aggregation for the Events bar chart. Bucket keys are
+# lexicographically ordered strings, so they map 1:1 onto a categorical axis.
+_BUCKET_FMT = {"hour": "%Y-%m-%d %H", "day": "%Y-%m-%d", "month": "%Y-%m"}
+
+
+def _iter_bucket_keys(bucket: str, offset: int, tz_offset_min: int) -> list[str]:
+    """Enumerate the bucket keys (local-time, ordered) covering a window.
+
+    bucket:        hour (one day) | day (one month) | month (one year)
+    offset:        0 = current window, negative = earlier, positive = later
+    tz_offset_min: timezone offset in minutes east of UTC (e.g. +480 for UTC+8)
+    """
+    import calendar
+
+    now_local = datetime.now(timezone.utc) + timedelta(minutes=tz_offset_min)
+    if bucket == "hour":
+        base = now_local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=offset)
+        return [f"{(base + timedelta(hours=i)):%Y-%m-%d %H}" for i in range(24)]
+    if bucket == "day":
+        total = now_local.year * 12 + (now_local.month - 1) + offset
+        year, month = divmod(total, 12)
+        month += 1
+        ndays = calendar.monthrange(year, month)[1]
+        return [f"{year:04d}-{month:02d}-{d:02d}" for d in range(1, ndays + 1)]
+    # month
+    year = now_local.year + offset
+    return [f"{year:04d}-{m:02d}" for m in range(1, 13)]
+
+
+@router.get("/security/stats/timeseries")
+async def security_stats_timeseries(
+    bucket: str = "hour",
+    offset: int = 0,
+    tz_offset: int = 0,
+    machine_id: str = "",
+):
+    """Time-bucketed event counts for the Events bar chart.
+
+    bucket:      hour | day | month
+    offset:      0 = current window, -1 = previous, +1 = next (caller clamps
+                 navigation into the future on the front end)
+    tz_offset:   timezone offset in minutes east of UTC (e.g. 480 for UTC+8),
+                 supplied by the browser so buckets align with the viewer's
+                 local calendar days
+    machine_id:  optional per-machine filter (empty = all machines)
+
+    Returns {bucket, offset, tz_offset, buckets:[{key, total, unique_ips,
+    by_type:{...}}]} with empty buckets zero-filled, ordered lexicographically.
+    """
+    if bucket not in _BUCKET_FMT:
+        raise HTTPException(400, f"invalid bucket: {bucket}")
+    # Clamp to real-world UTC offsets (UTC-14 .. UTC+14) as a sanity guard.
+    tz_offset = max(-840, min(840, int(tz_offset)))
+    fmt = _BUCKET_FMT[bucket]
+    keys = _iter_bucket_keys(bucket, int(offset), tz_offset)
+    mod = f"{tz_offset:+d} minutes"
+    # e.ts is an ISO string with an explicit offset; strftime normalises it to
+    # UTC before applying the viewer's offset. `instr(ts,'T')>0` drops legacy
+    # malformed rows that would otherwise bucket under a NULL key.
+    mcond = " AND e.machine_id = ?" if machine_id else ""
+    mparam = [machine_id] if machine_id else []
+
+    conn = _sec_db()
+    try:
+        rows = conn.execute(
+            f"SELECT strftime(?, e.ts, ?) AS b, COUNT(*) AS total, "
+            f"COUNT(DISTINCT e.src_ip) AS uniq "
+            f"FROM security_events e "
+            f"WHERE instr(e.ts, 'T') > 0 {mcond} "
+            f"GROUP BY b",
+            (fmt, mod, *mparam),
+        ).fetchall()
+        totals: dict[str, int] = {}
+        uniq: dict[str, int] = {}
+        for r in rows:
+            if r["b"] is not None:
+                totals[r["b"]] = r["total"]
+                uniq[r["b"]] = r["uniq"]
+
+        trows = conn.execute(
+            f"SELECT strftime(?, e.ts, ?) AS b, e.event_type AS t, COUNT(*) AS c "
+            f"FROM security_events e "
+            f"WHERE instr(e.ts, 'T') > 0 {mcond} "
+            f"GROUP BY b, t",
+            (fmt, mod, *mparam),
+        ).fetchall()
+        by_type: dict[str, dict[str, int]] = {}
+        for r in trows:
+            if r["b"] is not None:
+                by_type.setdefault(r["b"], {})[r["t"]] = r["c"]
+
+        buckets = [
+            {
+                "key": k,
+                "total": totals.get(k, 0),
+                "unique_ips": uniq.get(k, 0),
+                "by_type": by_type.get(k, {}),
+            }
+            for k in keys
+        ]
+        return {
+            "bucket": bucket,
+            "offset": offset,
+            "tz_offset": tz_offset,
+            "buckets": buckets,
         }
     finally:
         conn.close()

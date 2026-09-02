@@ -184,6 +184,14 @@ msgstr "Barcha konteynerlar"
 msgid "All Systems"
 msgstr "Barcha tizimlar"
 
+#: src/components/routes/security.tsx
+msgid "All time Event Types"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "All time Unique IPs"
+msgstr ""
+
 #: src/components/systems-table/systems-table-columns.tsx
 msgid "Are you sure you want to delete {name}?"
 msgstr "{name} ni o'chirishni xohlaysizmi?"
@@ -815,8 +823,8 @@ msgid "Event Timeline"
 msgstr ""
 
 #: src/components/routes/security.tsx
-msgid "Event Types"
-msgstr ""
+#~ msgid "Event Types"
+#~ msgstr ""
 
 #: src/components/routes/security.tsx
 msgid "Events"
@@ -1946,8 +1954,8 @@ msgid "Type"
 msgstr "Tur"
 
 #: src/components/routes/security.tsx
-msgid "Unique IPs"
-msgstr ""
+#~ msgid "Unique IPs"
+#~ msgstr ""
 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Unit file"

@@ -189,6 +189,14 @@ msgstr "Tous les conteneurs"
 msgid "All Systems"
 msgstr "Tous les systèmes"
 
+#: src/components/routes/security.tsx
+msgid "All time Event Types"
+msgstr ""
+
+#: src/components/routes/security.tsx
+msgid "All time Unique IPs"
+msgstr ""
+
 #: src/components/systems-table/systems-table-columns.tsx
 msgid "Are you sure you want to delete {name}?"
 msgstr "Êtes-vous sûr de vouloir supprimer {name} ?"
@@ -820,8 +828,8 @@ msgid "Event Timeline"
 msgstr ""
 
 #: src/components/routes/security.tsx
-msgid "Event Types"
-msgstr ""
+#~ msgid "Event Types"
+#~ msgstr ""
 
 #: src/components/routes/security.tsx
 msgid "Events"
@@ -1951,8 +1959,8 @@ msgid "Type"
 msgstr "Type"
 
 #: src/components/routes/security.tsx
-msgid "Unique IPs"
-msgstr ""
+#~ msgid "Unique IPs"
+#~ msgstr ""
 
 #: src/components/systemd-table/systemd-table.tsx
 msgid "Unit file"

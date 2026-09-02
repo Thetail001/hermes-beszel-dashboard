@@ -1,10 +1,12 @@
 import { Trans } from "@lingui/react/macro"
-import { useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Input } from "@/components/ui/input"
+import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartTooltipContent } from "@/components/ui/chart"
+import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { geoEqualEarth, geoPath } from "d3-geo"
 import { feature } from "topojson-client"
 
@@ -216,39 +218,201 @@ function TypeDonut({ byType }: { byType: Record<string, number> }) {
 	)
 }
 
-/** Sparkline: 24h event density */
-function DensitySparkline({ events }: { events: SecurityEvent[] }) {
-	if (events.length === 0) return null
+// ---------------------------------------------------------------- Events chart
+const EVENT_TYPE_KEYS = Object.keys(TYPE_COLORS)
 
-	const hours = Array(24).fill(0)
-	const now = Date.now()
-	for (const ev of events) {
-		const h = Math.floor((now - new Date(ev.ts).getTime()) / 3600000)
-		if (h >= 0 && h < 24) hours[23 - h]++
+type ChartBucket = "hour" | "day" | "month"
+type ChartMetric = "events" | "unique_ips"
+
+interface TimeseriesBucket {
+	key: string
+	total: number
+	unique_ips: number
+	by_type: Record<string, number>
+}
+
+function chartWindowLabel(bucket: ChartBucket, keys: string[]): string {
+	if (!keys.length) return ""
+	if (bucket === "hour") {
+		return new Date(keys[0].slice(0, 10) + "T00:00:00").toLocaleDateString(undefined, {
+			month: "short",
+			day: "numeric",
+			year: "numeric",
+		})
 	}
+	if (bucket === "day") {
+		const [y, m] = keys[0].split("-").map(Number)
+		return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "long", year: "numeric" })
+	}
+	return keys[0].slice(0, 4)
+}
 
-	const max = Math.max(...hours, 1)
-	const w = 200
-	const h = 30
-	const bw = w / 24
+function chartTickLabel(key: string, bucket: ChartBucket): string {
+	if (bucket === "hour") return key.slice(11)
+	if (bucket === "day") return String(parseInt(key.slice(8), 10))
+	const m = parseInt(key.slice(5), 10)
+	return new Date(2000, m - 1, 1).toLocaleDateString(undefined, { month: "short" })
+}
+
+/** Events time-bucket bar chart: hourly/daily/monthly, pan, metric toggle and type stacking. */
+function EventsChart({ machineId, refreshInterval }: { machineId: string; refreshInterval: number }) {
+	const [bucket, setBucket] = useState<ChartBucket>("hour")
+	const [offset, setOffset] = useState(0)
+	const [metric, setMetric] = useState<ChartMetric>("events")
+	const [splitType, setSplitType] = useState(false)
+	const [buckets, setBuckets] = useState<TimeseriesBucket[]>([])
+
+	const load = useCallback(() => {
+		// Browser-local timezone offset (minutes east of UTC) keeps buckets
+		// aligned with the viewer's calendar days regardless of server TZ.
+		const tz = -new Date().getTimezoneOffset()
+		const p = new URLSearchParams({
+			bucket,
+			offset: String(offset),
+			tz_offset: String(tz),
+		})
+		if (machineId) p.set("machine_id", machineId)
+		fetch(`/api/plugins/beszel/security/stats/timeseries?${p}`)
+			.then((r) => r.json())
+			.then((d) => setBuckets(d.buckets || []))
+			.catch(() => {})
+	}, [bucket, offset, machineId])
+
+	useEffect(() => {
+		load()
+	}, [load])
+
+	// Auto-refresh, following the global refresh interval.
+	useEffect(() => {
+		if (refreshInterval <= 0) return
+		const id = setInterval(load, refreshInterval * 1000)
+		return () => clearInterval(id)
+	}, [load, refreshInterval])
+
+	const { chartData, activeTypes } = useMemo(() => {
+		const active = new Set<string>()
+		const data: any[] = buckets.map((b) => {
+			const row: Record<string, number | string> = {
+				label: chartTickLabel(b.key, bucket),
+				__total: b.total,
+				__uniq: b.unique_ips,
+			}
+			for (const [t, c] of Object.entries(b.by_type)) {
+				row[t] = c
+				if (c > 0) active.add(t)
+			}
+			return row
+		})
+		return { chartData: data, activeTypes: Array.from(active) }
+	}, [buckets, bucket])
+
+	// Forward navigation is clamped to the current window (no future buckets).
+	const canGoForward = offset < 0
+	const isStacked = metric === "events" && splitType
 
 	return (
-		<div className="space-y-1">
-			<div className="text-xs text-muted-foreground">24h density</div>
-			<svg width={w} height={h} className="block">
-				{hours.map((count, i) => (
-					<rect
-						key={i}
-						x={i * bw}
-						y={h - (count / max) * h}
-						width={bw - 1}
-						height={(count / max) * h}
-						fill={count > 0 ? "#22c55e" : "#333"}
-						rx={1}
-					/>
-				))}
-			</svg>
-		</div>
+		<Card>
+			<CardHeader className="space-y-3">
+				<div className="flex flex-wrap items-center justify-between gap-3">
+					<CardTitle><Trans>Events</Trans></CardTitle>
+					<div className="flex items-center gap-2">
+						<Button variant="outline" size="sm" className="h-7 w-7 p-0 text-xs" onClick={() => setOffset((o) => o - 1)}>
+							←
+						</Button>
+						<span className="min-w-28 text-center text-xs text-muted-foreground">
+							{chartWindowLabel(bucket, buckets.map((b) => b.key))}
+						</span>
+						<Button
+							variant="outline"
+							size="sm"
+							className="h-7 w-7 p-0 text-xs"
+							disabled={!canGoForward}
+							onClick={() => setOffset((o) => o + 1)}
+						>
+							→
+						</Button>
+					</div>
+				</div>
+				<div className="flex flex-wrap items-center gap-3 border-t pt-3">
+					<div className="flex gap-1">
+						{(["hour", "day", "month"] as const).map((g) => (
+							<Button
+								key={g}
+								variant={bucket === g ? "default" : "outline"}
+								size="sm"
+								className="h-7 px-2 text-xs capitalize"
+								onClick={() => {
+									setBucket(g)
+									setOffset(0)
+								}}
+							>
+								{g}
+							</Button>
+						))}
+					</div>
+					<div className="flex gap-1">
+						<Button
+							variant={metric === "events" ? "default" : "outline"}
+							size="sm"
+							className="h-7 px-2 text-xs"
+							onClick={() => setMetric("events")}
+						>
+							Events
+						</Button>
+						<Button
+							variant={metric === "unique_ips" ? "default" : "outline"}
+							size="sm"
+							className="h-7 px-2 text-xs"
+							onClick={() => setMetric("unique_ips")}
+						>
+							Unique IPs
+						</Button>
+					</div>
+					{metric === "events" && (
+						<label className="flex items-center gap-2 text-xs text-muted-foreground">
+							<input
+								type="checkbox"
+								checked={splitType}
+								onChange={(e) => setSplitType(e.target.checked)}
+								className="h-3.5 w-3.5"
+							/>
+							Split by type
+						</label>
+					)}
+				</div>
+			</CardHeader>
+			<CardContent>
+				<ChartContainer className="h-64 w-full">
+					<BarChart data={chartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+						<CartesianGrid vertical={false} strokeDasharray="3 3" />
+						<XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={12} fontSize={11} />
+						<YAxis tickLine={false} axisLine={false} fontSize={11} allowDecimals={false} />
+						<ChartTooltip content={<ChartTooltipContent />} />
+						{isStacked ? (
+							EVENT_TYPE_KEYS.filter((t) => activeTypes.includes(t)).map((t) => (
+								<Bar
+									key={t}
+									dataKey={t}
+									name={t.replace("_", " ")}
+									stackId="a"
+									fill={TYPE_COLORS[t]}
+									isAnimationActive={false}
+								/>
+							))
+						) : (
+							<Bar
+								dataKey={metric === "events" ? "__total" : "__uniq"}
+								name={metric === "events" ? "Events" : "Unique IPs"}
+								fill="#3b82f6"
+								radius={[2, 2, 0, 0]}
+								isAnimationActive={false}
+							/>
+						)}
+						{isStacked && <ChartLegend content={<ChartLegendContent />} />}
+					</BarChart>
+				</ChartContainer>
+			</CardContent>
+		</Card>
 	)
 }
 
@@ -1497,8 +1661,8 @@ export default function SecurityPage() {
 				</div>
 			</div>
 
-			{/* Stats cards */}
-			<div className="grid gap-4 md:grid-cols-4">
+			{/* Snapshot cards: all-time, follow only the global machine filter */}
+			<div className="grid gap-4 md:grid-cols-3">
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
 						<CardTitle className="text-sm font-medium"><Trans>Active Bans</Trans></CardTitle>
@@ -1510,16 +1674,7 @@ export default function SecurityPage() {
 				</Card>
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium"><Trans>Events</Trans></CardTitle>
-					</CardHeader>
-					<CardContent>
-						<div className="text-2xl font-bold">{summary?.total_events ?? "-"}</div>
-						<DensitySparkline events={events} />
-					</CardContent>
-				</Card>
-				<Card>
-					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium"><Trans>Unique IPs</Trans></CardTitle>
+						<CardTitle className="text-sm font-medium"><Trans>All time Unique IPs</Trans></CardTitle>
 					</CardHeader>
 					<CardContent>
 						<div className="text-2xl font-bold">{summary?.unique_ips ?? "-"}</div>
@@ -1528,13 +1683,16 @@ export default function SecurityPage() {
 				</Card>
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-						<CardTitle className="text-sm font-medium"><Trans>Event Types</Trans></CardTitle>
+						<CardTitle className="text-sm font-medium"><Trans>All time Event Types</Trans></CardTitle>
 					</CardHeader>
 					<CardContent>
 						<TypeDonut byType={summary?.by_type || {}} />
 					</CardContent>
 				</Card>
 			</div>
+
+			{/* Events time-series chart */}
+			<EventsChart machineId={filter.machine_id} refreshInterval={refreshInterval} />
 
 			{/* Attack map */}
 			<Card>
