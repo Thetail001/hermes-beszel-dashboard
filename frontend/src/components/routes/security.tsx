@@ -367,6 +367,7 @@ function AttackMap({
 			id: number | string
 			ip: string
 			country: string | null
+			city?: string | null
 			lat: number
 			lon: number
 			machine_id: string
@@ -374,6 +375,10 @@ function AttackMap({
 			count: number
 			ts: string
 			color: string
+			// Dispersed coordinates computed in layout pass
+			dispX?: number
+			dispY?: number
+			clusterKey?: string
 		}
 
 		let rawItems: MapItem[] = []
@@ -415,7 +420,65 @@ function AttackMap({
 		else if (effectLevel === 1) maxLines = 50
 		const visibleItems = rawItems.slice(0, maxLines)
 
-		// Pre-calculate trajectories
+		// Group items into geographic clusters by coordinates (rounded to ~1km)
+		type GeoCluster = {
+			key: string
+			lat: number
+			lon: number
+			basePos: [number, number]
+			items: MapItem[]
+			totalHits: number
+			country: string | null
+		}
+
+		const clusters: Record<string, GeoCluster> = {}
+		for (const item of visibleItems) {
+			const cKey = `${item.lat.toFixed(2)},${item.lon.toFixed(2)}`
+			if (!clusters[cKey]) {
+				const basePos = projection([item.lon, item.lat])
+				if (!basePos) continue
+				clusters[cKey] = {
+					key: cKey,
+					lat: item.lat,
+					lon: item.lon,
+					basePos,
+					items: [],
+					totalHits: 0,
+					country: item.country,
+				}
+			}
+			item.clusterKey = cKey
+			clusters[cKey].items.push(item)
+			clusters[cKey].totalHits += item.count
+		}
+
+		// Compute dispersed satellite coordinates (Spiderfy / Orbital Dispersion)
+		const isDispersed = zoom >= 2.0
+		const clusterList = Object.values(clusters)
+
+		for (const cluster of clusterList) {
+			const n = cluster.items.length
+			if (n === 1 || !isDispersed) {
+				for (const item of cluster.items) {
+					item.dispX = cluster.basePos[0]
+					item.dispY = cluster.basePos[1]
+				}
+			} else {
+				// Smooth dispersion expansion between 2.0x and 2.5x zoom
+				const tExp = Math.min(1.0, (zoom - 2.0) / 0.5)
+				const orbitScreenR = (16 + Math.min(n, 16) * 1.8) * tExp
+				const orbitWorldR = orbitScreenR / zoom
+
+				for (let i = 0; i < n; i++) {
+					const item = cluster.items[i]
+					const angle = (2 * Math.PI * i) / n - Math.PI / 2
+					item.dispX = cluster.basePos[0] + Math.cos(angle) * orbitWorldR
+					item.dispY = cluster.basePos[1] + Math.sin(angle) * orbitWorldR
+				}
+			}
+		}
+
+		// Pre-calculate trajectories from (dispX, dispY) -> target machine
 		const lines: Array<{
 			item: MapItem
 			sx: number
@@ -431,9 +494,9 @@ function AttackMap({
 		}> = []
 
 		for (const item of visibleItems) {
-			const sourcePos = projection([item.lon, item.lat])
-			if (!sourcePos) continue
-			const [sx, sy] = sourcePos
+			if (item.dispX == null || item.dispY == null) continue
+			const sx = item.dispX
+			const sy = item.dispY
 
 			const targetPos = (item.machine_id && machinePositions[item.machine_id]) || defaultTargetPos
 			const [tx, ty] = targetPos
@@ -445,8 +508,7 @@ function AttackMap({
 			const midX = (sx + tx) / 2 + curveFactor * curvature
 			const midY = (sy + ty) / 2 - curvature * 0.6
 
-			// Dot radius with frequency weighting
-			const radius = Math.min(2.5 + Math.log2(item.count + 1) * 0.8, 6.5)
+			const radius = Math.min(2.2 + Math.log2(item.count + 1) * 0.7, 6.0)
 
 			lines.push({
 				item,
@@ -544,38 +606,119 @@ function AttackMap({
 				}
 			}
 
-			// Source Attack / Ban Nodes
-			for (const line of lines) {
-				const r = Math.max(line.radius / zoom, 1.5 / zoom)
+			// Cluster spokes & Satellite Nodes
+			if (isDispersed) {
+				// Draw spiderfy connector spokes from cluster center to satellites
+				for (const cluster of clusterList) {
+					if (cluster.items.length > 1) {
+						ctx.strokeStyle = "rgba(255, 255, 255, 0.18)"
+						ctx.lineWidth = 0.6 / zoom
+						for (const item of cluster.items) {
+							if (item.dispX != null && item.dispY != null) {
+								ctx.beginPath()
+								ctx.moveTo(cluster.basePos[0], cluster.basePos[1])
+								ctx.lineTo(item.dispX, item.dispY)
+								ctx.stroke()
+							}
+						}
+						// Small central hub dot
+						ctx.fillStyle = "rgba(255, 255, 255, 0.45)"
+						ctx.beginPath()
+						ctx.arc(cluster.basePos[0], cluster.basePos[1], 1.8 / zoom, 0, Math.PI * 2)
+						ctx.fill()
+					}
+				}
 
-				// High frequency halo
-				if (line.item.count >= 10 && hasGrid) {
+				// Draw dispersed individual satellite dots
+				for (const line of lines) {
+					const r = Math.max(line.radius / zoom, 1.4 / zoom)
+
+					// High frequency halo
+					if (line.item.count >= 10 && hasGrid) {
+						ctx.fillStyle = line.color
+						ctx.globalAlpha = 0.2
+						ctx.beginPath()
+						ctx.arc(line.sx, line.sy, r * 2.2, 0, Math.PI * 2)
+						ctx.fill()
+						ctx.globalAlpha = 1.0
+					}
+
+					// Center Dot
 					ctx.fillStyle = line.color
-					ctx.globalAlpha = 0.2
 					ctx.beginPath()
-					ctx.arc(line.sx, line.sy, r * 2.2, 0, Math.PI * 2)
+					ctx.arc(line.sx, line.sy, r, 0, Math.PI * 2)
 					ctx.fill()
-					ctx.globalAlpha = 1.0
+
+					// LOD Level 1 (Zoom >= 1.8): Display Country Code Badge
+					if (line.item.country) {
+						ctx.font = `600 ${Math.max(8 / zoom, 5)}px monospace`
+						ctx.fillStyle = "rgba(255,255,255,0.75)"
+						ctx.fillText(line.item.country, line.sx + r + 2 / zoom, line.sy + 2.5 / zoom)
+					}
+
+					// LOD Level 2 (Zoom >= 3.2): Display Masked IP
+					if (zoom >= 3.2) {
+						ctx.font = `${Math.max(7 / zoom, 4.5)}px sans-serif`
+						ctx.fillStyle = "rgba(255,255,255,0.45)"
+						ctx.fillText(line.item.ip, line.sx + r + 2 / zoom, line.sy + 10 / zoom)
+					}
 				}
+			} else {
+				// Zoom < 2.0: Aggregated Cluster rendering
+				for (const cluster of clusterList) {
+					const n = cluster.items.length
+					const primaryColor = cluster.items[0]?.color || "#3b82f6"
 
-				// Center Dot
-				ctx.fillStyle = line.color
-				ctx.beginPath()
-				ctx.arc(line.sx, line.sy, r, 0, Math.PI * 2)
-				ctx.fill()
+					if (n > 1) {
+						// Multi-IP aggregated cluster
+						const r = Math.min(3.5 + Math.log2(cluster.totalHits + 1) * 0.6 + Math.min(n, 10) * 0.4, 8.5) / zoom
 
-				// LOD Level 1 (Zoom >= 1.8): Display Country Code Badge
-				if (zoom >= 1.8 && line.item.country) {
-					ctx.font = `600 ${Math.max(8 / zoom, 5)}px monospace`
-					ctx.fillStyle = "rgba(255,255,255,0.75)"
-					ctx.fillText(line.item.country, line.sx + r + 2 / zoom, line.sy + 2.5 / zoom)
-				}
+						// Cluster Glow
+						ctx.fillStyle = primaryColor
+						ctx.globalAlpha = 0.25
+						ctx.beginPath()
+						ctx.arc(cluster.basePos[0], cluster.basePos[1], r * 1.8, 0, Math.PI * 2)
+						ctx.fill()
+						ctx.globalAlpha = 1.0
 
-				// LOD Level 2 (Zoom >= 3.5): Display Masked IP
-				if (zoom >= 3.5) {
-					ctx.font = `${Math.max(7 / zoom, 4.5)}px sans-serif`
-					ctx.fillStyle = "rgba(255,255,255,0.45)"
-					ctx.fillText(line.item.ip, line.sx + r + 2 / zoom, line.sy + 10 / zoom)
+						// Cluster Core Dot
+						ctx.fillStyle = primaryColor
+						ctx.beginPath()
+						ctx.arc(cluster.basePos[0], cluster.basePos[1], r, 0, Math.PI * 2)
+						ctx.fill()
+
+						// Cluster Count Badge (if zoom >= 1.2)
+						if (zoom >= 1.2) {
+							ctx.font = `bold ${Math.max(7.5 / zoom, 5)}px monospace`
+							ctx.fillStyle = "#ffffff"
+							const label = cluster.country ? `${cluster.country} [${n}]` : `[${n}]`
+							ctx.fillText(label, cluster.basePos[0] + r + 2 / zoom, cluster.basePos[1] + 2.5 / zoom)
+						}
+					} else {
+						// Single IP node
+						const item = cluster.items[0]
+						const r = Math.max(2.2 / zoom, 1.4 / zoom)
+
+						if (item.count >= 10 && hasGrid) {
+							ctx.fillStyle = item.color
+							ctx.globalAlpha = 0.2
+							ctx.beginPath()
+							ctx.arc(cluster.basePos[0], cluster.basePos[1], r * 2.2, 0, Math.PI * 2)
+							ctx.fill()
+							ctx.globalAlpha = 1.0
+						}
+
+						ctx.fillStyle = item.color
+						ctx.beginPath()
+						ctx.arc(cluster.basePos[0], cluster.basePos[1], r, 0, Math.PI * 2)
+						ctx.fill()
+
+						if (zoom >= 1.8 && item.country) {
+							ctx.font = `600 ${Math.max(8 / zoom, 5)}px monospace`
+							ctx.fillStyle = "rgba(255,255,255,0.75)"
+							ctx.fillText(item.country, cluster.basePos[0] + r + 2 / zoom, cluster.basePos[1] + 2.5 / zoom)
+						}
+					}
 				}
 			}
 
@@ -717,39 +860,138 @@ function AttackMap({
 			}
 		}
 
-		// Check trajectory source points
-		const items = mapMode === "attackers" ? events : bans
-		for (const item of items) {
-			const lat = (item as any).lat
-			const lon = (item as any).lon
-			if (lat != null && lon != null) {
-				const pos = projection([lon, lat])
-				if (!pos) continue
-				const sx = pos[0] * zoom + pan.x
-				const sy = pos[1] * zoom + pan.y
-				if (Math.hypot(mouseX - sx, mouseY - sy) <= 9) {
+		// Check trajectory source points / clusters
+		const isDispersed = zoom >= 2.0
+		const raw: any[] = mapMode === "attackers" ? events : bans
+		const items = raw.filter((item) => item.lat != null && item.lon != null)
+
+		// Group into clusters
+		type HitCluster = {
+			key: string
+			basePos: [number, number]
+			items: any[]
+			totalHits: number
+			country: string | null
+		}
+		const hitClusters: Record<string, HitCluster> = {}
+		for (const it of items) {
+			const itLat = Number(it.lat)
+			const itLon = Number(it.lon)
+			const k = `${itLat.toFixed(2)},${itLon.toFixed(2)}`
+			if (!hitClusters[k]) {
+				const basePos = projection([itLon, itLat])
+				if (!basePos) continue
+				hitClusters[k] = {
+					key: k,
+					basePos,
+					items: [],
+					totalHits: 0,
+					country: it.country || null,
+				}
+			}
+			hitClusters[k].items.push(it)
+			hitClusters[k].totalHits += Number(it.count || it.ban_count || 1)
+		}
+
+		if (!isDispersed) {
+			// Zoom < 2.0: Hit test against cluster centers
+			for (const cluster of Object.values(hitClusters)) {
+				const sx = cluster.basePos[0] * zoom + pan.x
+				const sy = cluster.basePos[1] * zoom + pan.y
+				const hitRadius = cluster.items.length > 1 ? 14 : 9
+
+				if (Math.hypot(mouseX - sx, mouseY - sy) <= hitRadius) {
 					const isBan = mapMode === "bans"
-					const ip = (item as any).ip || (item as any).src_ip
-					const country = (item as any).country
-					const machineId = item.machine_id
-					const type = (item as any).event_type || (item as any).jail
-					const count = (item as any).count || (item as any).ban_count || 1
-					const ts = (item as any).ts || (item as any).banned_at
-					setHovered({
-						type: "source",
-						title: ip,
-						subtitle: [country, (item as any).city].filter(Boolean).join(" · ") || country || "Unknown Location",
-						badge: isBan ? `Banned: ${type}` : type,
-						badgeColor: isBan ? "bg-red-500/20 text-red-400 border-red-500/30" : "bg-amber-500/20 text-amber-400 border-amber-500/30",
-						details: [
-							{ label: "Target", val: machineId || "All" },
-							{ label: "Hits", val: `× ${count}` },
-							{ label: "Time", val: ts ? new Date(ts).toLocaleTimeString() : "Recent" },
-						],
-						x: mouseX,
-						y: mouseY,
-					})
+					if (cluster.items.length > 1) {
+						// Multi-IP Cluster Tooltip
+						const topIps = cluster.items
+							.slice(0, 3)
+							.map((it) => `${it.ip || it.src_ip} (×${it.count || it.ban_count || 1})`)
+							.join(", ")
+						setHovered({
+							type: "source",
+							title: `📍 ${cluster.country || "Cluster"} (${cluster.items.length} IPs)`,
+							subtitle: `${cluster.totalHits} events from this location`,
+							badge: `${cluster.items.length} ${isBan ? "Bans" : "Attackers"}`,
+							badgeColor: "bg-primary/20 text-primary border-primary/30",
+							details: [
+								{ label: "Top IPs", val: topIps },
+								{ label: "Hint", val: "Zoom in (≥2.0x) to expand orbit" },
+							],
+							x: mouseX,
+							y: mouseY,
+						})
+					} else {
+						// Single IP Tooltip
+						const item = cluster.items[0]
+						const ip = item.ip || item.src_ip
+						const machineId = item.machine_id
+						const type = item.event_type || item.jail
+						const count = item.count || item.ban_count || 1
+						const ts = item.ts || item.banned_at
+						setHovered({
+							type: "source",
+							title: ip,
+							subtitle: [cluster.country, item.city].filter(Boolean).join(" · ") || cluster.country || "Unknown Location",
+							badge: isBan ? `Banned: ${type}` : type,
+							badgeColor: isBan ? "bg-red-500/20 text-red-400 border-red-500/30" : "bg-amber-500/20 text-amber-400 border-amber-500/30",
+							details: [
+								{ label: "Target", val: machineId || "All" },
+								{ label: "Hits", val: `× ${count}` },
+								{ label: "Time", val: ts ? new Date(ts).toLocaleTimeString() : "Recent" },
+							],
+							x: mouseX,
+							y: mouseY,
+						})
+					}
 					return
+				}
+			}
+		} else {
+			// Zoom >= 2.0: Hit test against dispersed satellite coordinates
+			for (const cluster of Object.values(hitClusters)) {
+				const n = cluster.items.length
+				const tExp = Math.min(1.0, (zoom - 2.0) / 0.5)
+				const orbitScreenR = (16 + Math.min(n, 16) * 1.8) * tExp
+				const orbitWorldR = orbitScreenR / zoom
+
+				for (let i = 0; i < n; i++) {
+					const item = cluster.items[i]
+					let dispX = cluster.basePos[0]
+					let dispY = cluster.basePos[1]
+					if (n > 1) {
+						const angle = (2 * Math.PI * i) / n - Math.PI / 2
+						dispX += Math.cos(angle) * orbitWorldR
+						dispY += Math.sin(angle) * orbitWorldR
+					}
+
+					const sx = dispX * zoom + pan.x
+					const sy = dispY * zoom + pan.y
+
+					if (Math.hypot(mouseX - sx, mouseY - sy) <= 10) {
+						const isBan = mapMode === "bans"
+						const ip = item.ip || item.src_ip
+						const country = item.country || cluster.country
+						const machineId = item.machine_id
+						const type = item.event_type || item.jail
+						const count = item.count || item.ban_count || 1
+						const ts = item.ts || item.banned_at
+						setHovered({
+							type: "source",
+							title: ip,
+							subtitle: [country, item.city].filter(Boolean).join(" · ") || country || "Unknown Location",
+							badge: isBan ? `Banned: ${type}` : type,
+							badgeColor: isBan ? "bg-red-500/20 text-red-400 border-red-500/30" : "bg-amber-500/20 text-amber-400 border-amber-500/30",
+							details: [
+								{ label: "Target", val: machineId || "All" },
+								{ label: "Hits", val: `× ${count}` },
+								{ label: "Time", val: ts ? new Date(ts).toLocaleTimeString() : "Recent" },
+							],
+							x: mouseX,
+							y: mouseY,
+						})
+						return
+					}
 				}
 			}
 		}
