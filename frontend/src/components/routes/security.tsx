@@ -132,6 +132,15 @@ function timeAgo(iso: string): string {
 	return `${Math.floor(h / 24)}d ago`
 }
 
+/** Compact, readable counters: thousands get separators, ≥1M gets K/M/B. */
+function formatCount(n: number | null | undefined): string {
+	if (n == null) return "-"
+	if (n >= 1_000_000) {
+		return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n)
+	}
+	return n.toLocaleString("en")
+}
+
 function buildQueryString(f: FilterState): string {
 	const p = new URLSearchParams()
 	if (f.period && f.period !== "custom") p.set("period", f.period)
@@ -215,7 +224,7 @@ function TypeDonut({ byType }: { byType: Record<string, number> }) {
 			<svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
 				{arcs}
 				<text x={cx} y={cy} textAnchor="middle" dominantBaseline="central" className="text-sm font-bold fill-current">
-					{total}
+					{formatCount(total)}
 				</text>
 			</svg>
 			<div className="space-y-1">
@@ -1682,7 +1691,7 @@ export default function SecurityPage() {
 						<CardTitle className="text-sm font-medium"><Trans>Active Bans</Trans></CardTitle>
 					</CardHeader>
 					<CardContent>
-						<div className="text-2xl font-bold">{summary?.active_bans ?? "-"}</div>
+						<div className="text-2xl font-bold">{formatCount(summary?.active_bans)}</div>
 						<p className="text-xs text-muted-foreground"><Trans>Currently banned IPs</Trans></p>
 					</CardContent>
 				</Card>
@@ -1691,7 +1700,7 @@ export default function SecurityPage() {
 						<CardTitle className="text-sm font-medium"><Trans>All time Unique IPs</Trans></CardTitle>
 					</CardHeader>
 					<CardContent>
-						<div className="text-2xl font-bold">{summary?.unique_ips ?? "-"}</div>
+						<div className="text-2xl font-bold">{formatCount(summary?.unique_ips)}</div>
 						<p className="text-xs text-muted-foreground"><Trans>Distinct source IPs</Trans></p>
 					</CardContent>
 				</Card>
@@ -2062,7 +2071,7 @@ export default function SecurityPage() {
 												{[a.city, a.org || a.asn].filter(Boolean).join(" · ")}
 											</span>
 										)}
-										<span className="text-xs text-muted-foreground">({a.total_events} events)</span>
+										<span className="text-xs text-muted-foreground">({formatCount(a.total_events)} events)</span>
 										<span className="ml-auto text-xs text-muted-foreground">{timeAgo(a.last_seen)}</span>
 									</div>
 									<div className="mt-2 flex flex-wrap gap-1">
