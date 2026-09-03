@@ -12,3 +12,4 @@ agent_token.txt
 *.jsonl
 *.bak.*
 NOTES.md
+reports/
