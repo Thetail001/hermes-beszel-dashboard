@@ -249,6 +249,8 @@ CREATE INDEX IF NOT EXISTS idx_events_ip ON security_events(src_ip);
 CREATE INDEX IF NOT EXISTS idx_events_type_ts ON security_events(event_type, ts);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id
     ON security_events(event_id);
+CREATE INDEX IF NOT EXISTS idx_events_machine ON security_events(machine_id, ts);
+CREATE INDEX IF NOT EXISTS idx_events_ts_jd ON security_events(julianday(ts));
 
 CREATE TABLE IF NOT EXISTS security_bans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -263,6 +265,7 @@ CREATE TABLE IF NOT EXISTS security_bans (
 );
 CREATE INDEX IF NOT EXISTS idx_bans_active ON security_bans(unbanned_at IS NULL);
 CREATE INDEX IF NOT EXISTS idx_bans_ip ON security_bans(ip);
+CREATE INDEX IF NOT EXISTS idx_bans_banned_jd ON security_bans(julianday(banned_at));
 
 CREATE TABLE IF NOT EXISTS geo_cache (
     ip TEXT PRIMARY KEY,
@@ -283,6 +286,10 @@ CREATE TABLE IF NOT EXISTS geo_cache (
 def _sec_db() -> sqlite3.Connection:
     conn = sqlite3.connect(str(SEC_DB))
     conn.row_factory = sqlite3.Row
+    # WAL lets readers and the ingest writer run concurrently as the event
+    # table grows; busy_timeout is per-connection, so set it explicitly.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_SEC_SCHEMA)
     try:
         cols_sec = [r[1] for r in conn.execute("PRAGMA table_info(security_events)").fetchall()]
