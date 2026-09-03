@@ -9,7 +9,7 @@
 #   scripts/release.sh <tag> [notes]
 #
 # 示例：
-#   scripts/release.sh v0.1.0-beta "首个 beta 版本"
+#   scripts/release.sh v0.2.1 "版本说明"
 #
 # 前置：
 #   - node/npm（构建前端）

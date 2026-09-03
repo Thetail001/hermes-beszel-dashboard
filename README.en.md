@@ -33,7 +33,8 @@ Control host:      beszel hub (PocketBase)   token auth + idempotent UPSERT + Ge
 - Three log sources: `auth.log` (SSH brute force, with username extraction), `fail2ban.log` (ban/unban), nginx access log (scans/attack paths)
 - Multi-machine architecture: agents are stateless pushers (60s window merging to survive floods); the centre is the single writer. `event_id` idempotent UPSERT; a jsonl disk buffer with automatic retry covers outages
 - Centre-side GeoIP enrichment (dbip-city-lite, monthly auto-update + hot reload); the attack map renders real coordinates
-- Attacker cards (aggregated per IP), per-IP timeline, live event stream, global filters (`ip:` `type:` `country:` syntax), CSV/JSON export, 90-day auto rotation
+- Attacker cards (aggregated per IP, with target-machine display), per-IP timeline, live event stream, global filters (`ip:` `type:` `country:` syntax), CSV/JSON export, 90-day auto rotation
+- UX: thousands separators / K-M-B counters, sticky machine+refresh controls, export truncation notice, SQLite WAL + indexes (indexed queries)
 - Security: bearer token reuses beszel's universal token (managed in the web UI at `/settings/tokens`), machine_id checked against beszel's systems table, strict input validation (type whitelist / public IP / time window / count cap / batch cap), fully parameterized SQL
 
 ## Repository layout
@@ -164,7 +165,7 @@ cd frontend
 npm install && npm run build
 
 # Release a new version (build dist → package → create GitHub Release)
-scripts/release.sh v0.1.0-beta "release notes"
+scripts/release.sh v0.2.1 "release notes"
 ```
 
 > The front-end source is vendored from [henrygd/beszel](https://github.com/henrygd/beszel) `internal/site` (baseline commit in `frontend/VENDOR.md`). Our modifications are committed directly on top of the vendor baseline — to review upstream changes, diff `internal/site` against `frontend/`.

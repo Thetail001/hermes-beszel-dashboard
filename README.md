@@ -33,7 +33,8 @@
 - 三源采集：`auth.log`（SSH 爆破，含用户名提取）、`fail2ban.log`（ban/unban）、nginx access log（扫描/攻击路径）
 - 多机架构：agent 无状态只推送（60s 窗口合并抗刷），中心统一入库；`event_id` 幂等 UPSERT，断网用 jsonl 磁盘缓冲补推
 - 中心侧 GeoIP 富化（dbip-city-lite，月度自动更新+热重载），攻击地图按真实坐标渲染
-- 攻击者卡片（按 IP 聚合）、IP 时间线、实时事件流、全局筛选（`ip:` `type:` `country:` 语法）、CSV/JSON 导出、90 天自动轮换
+- 攻击者卡片（按 IP 聚合，含目标机器展示）、IP 时间线、实时事件流、全局筛选（`ip:` `type:` `country:` 语法）、CSV/JSON 导出、90 天自动轮换
+- 体验优化：大计数千分位 / K-M-B 缩写、机器与刷新控件滚动钉顶、导出截断提示、SQLite WAL + 索引（查询走索引）
 - 安全：bearer token 复用 beszel 的 universal token（webui `/settings/tokens` 管理）、machine_id 与 beszel systems 表校验、严格输入校验（白名单/IP/时间窗/count 上限/批量上限）、全参数化 SQL
 
 ## 项目结构
@@ -164,7 +165,7 @@ cd frontend
 npm install && npm run build
 
 # 发布新版本（构建 dist → 打包 → 创建 GitHub Release）
-scripts/release.sh v0.1.0-beta "版本说明"
+scripts/release.sh v0.2.1 "版本说明"
 ```
 
 > 前端源码 vendor 自 [henrygd/beszel](https://github.com/henrygd/beszel) 的 `internal/site`（基线 commit 见 `frontend/VENDOR.md`）。我们的魔改直接 commit 在 vendor 基线之上，上游更新时 diff `internal/site` 与 `frontend/` 即可看到上游改动。
