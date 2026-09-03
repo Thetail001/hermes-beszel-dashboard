@@ -692,7 +692,8 @@ async def security_attackers(
                 COUNT(*) as total_events,
                 MAX(e.ts) as last_seen,
                 MIN(e.ts) as first_seen,
-                GROUP_CONCAT(DISTINCT e.event_type) as types
+                GROUP_CONCAT(DISTINCT e.event_type) as types,
+                GROUP_CONCAT(DISTINCT e.machine_id) as targets
             FROM security_events e
             LEFT JOIN geo_cache g ON e.src_ip = g.ip
             WHERE {time_cond} {filters}

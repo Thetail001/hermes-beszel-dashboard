@@ -86,6 +86,8 @@ interface Attacker {
 	last_seen: string
 	first_seen: string
 	types: string
+	/** comma-separated machine_ids this IP hit (GROUP_CONCAT DISTINCT) */
+	targets?: string
 }
 
 interface FilterState {
@@ -161,6 +163,20 @@ function parseQueryInput(input: string): Partial<FilterState> {
 }
 
 // ---------------------------------------------------------------- sub-components
+/** "→ A · B · C" — the machine(s) an attack hit. List rows pass truncate
+ * classes via className so every row keeps a uniform width; the detail view
+ * omits them to show full IDs. Full text is always on the title tooltip. */
+function MachineTargets({ targets, className = "" }: { targets: (string | null | undefined)[]; className?: string }) {
+	const list = targets.filter((t): t is string => Boolean(t))
+	if (list.length === 0) return null
+	const label = list.join(" · ")
+	return (
+		<span className={`text-xs text-muted-foreground ${className}`} title={label}>
+			→ {label}
+		</span>
+	)
+}
+
 /** Donut chart: event type distribution */
 function TypeDonut({ byType }: { byType: Record<string, number> }) {
 	const total = Object.values(byType).reduce((a, b) => a + b, 0)
@@ -1884,6 +1900,7 @@ export default function SecurityPage() {
 								>
 									<Badge variant="destructive">{b.jail}</Badge>
 									<span className="font-mono text-sm font-semibold">{b.ip}</span>
+									<MachineTargets targets={[b.machine_id]} className="truncate max-w-[120px]" />
 									{b.country && <Badge variant="outline" className="text-xs">{b.country}</Badge>}
 									{(b.city || b.org || b.asn) && (
 										<span className="hidden sm:inline text-xs text-muted-foreground truncate max-w-[280px]">
@@ -2038,6 +2055,7 @@ export default function SecurityPage() {
 								>
 									<div className="flex flex-wrap items-center gap-2 sm:gap-3">
 										<span className="font-mono text-sm font-semibold">{a.src_ip}</span>
+										<MachineTargets targets={(a.targets || "").split(",")} className="truncate max-w-[160px]" />
 										{a.country && <Badge variant="outline" className="text-xs">{a.country}</Badge>}
 										{(a.city || a.org || a.asn) && (
 											<span className="text-xs text-muted-foreground truncate max-w-[320px]">
@@ -2130,6 +2148,10 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 		}
 	}
 
+	// Every machine this IP has hit (full set) — shown complete in the detail
+	// header; individual rows tag their own machine only when >1 is involved.
+	const targets = Array.from(new Set(events.map((e) => e.machine_id).filter(Boolean)))
+
 	const toggleExpand = (id: number) => {
 		setExpandedIds((prev) => {
 			const next = new Set(prev)
@@ -2170,6 +2192,14 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 						) : null}
 					</div>
 				)}
+				{targets.length > 0 && (
+					<div className="flex flex-wrap items-center gap-1 text-xs">
+						<span className="text-muted-foreground"><Trans>Targeted</Trans>:</span>
+						{targets.map((t) => (
+							<Badge key={t} variant="secondary" className="font-mono">{t}</Badge>
+						))}
+					</div>
+				)}
 				<div className="ml-auto flex gap-2">
 					<Button variant="outline" size="sm" className="h-7 text-xs" onClick={expandAll}>
 						<Trans>Expand all</Trans>
@@ -2206,6 +2236,9 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 										{ev.username && <span className="font-mono text-xs text-muted-foreground">user={ev.username}</span>}
 										{ev.uri && <span className="max-w-[200px] truncate text-muted-foreground">{ev.uri}</span>}
 										{ev.count > 1 && <span className="text-muted-foreground">×{ev.count}</span>}
+										{targets.length > 1 && (
+											<span className="font-mono text-xs text-muted-foreground">→ {ev.machine_id}</span>
+										)}
 										<span className="ml-auto text-xs text-muted-foreground">{timeAgo(ev.ts)}</span>
 									</div>
 									{/* Expanded raw log details */}
