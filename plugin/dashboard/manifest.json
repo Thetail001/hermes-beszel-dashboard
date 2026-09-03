@@ -3,7 +3,7 @@
   "label": "Beszel Monitor",
   "description": "Multi-machine server resource monitoring (beszel core) + security event situational awareness",
   "icon": "MonitorCog",
-  "version": "0.1.0",
+  "version": "0.2.1",
   "tab": {
     "path": "/beszel",
     "position": "end"

@@ -15,12 +15,12 @@
 # 环境变量（可选，不设则交互式询问）：
 #   BESZEL_SUPERUSER_EMAIL   beszel superuser 邮箱（脚本会自动建号）
 #   BESZEL_SUPERUSER_PASS    beszel superuser 密码
-#   BESZEL_RELEASE_TAG       GitHub Release tag（默认 v0.1.0-beta）
+#   BESZEL_RELEASE_TAG       GitHub Release tag（默认 v0.2.1）
 set -euo pipefail
 
 OUR_REPO="${OUR_REPO:-Thetail001/hermes-beszel-dashboard}"
 OUR_BRANCH="${OUR_BRANCH:-master}"
-RELEASE_TAG="${BESZEL_RELEASE_TAG:-v0.1.0-beta}"
+RELEASE_TAG="${BESZEL_RELEASE_TAG:-v0.2.1}"
 BESZEL_HUB_PORT="${BESZEL_HUB_PORT:-8090}"
 
 info() { printf '\033[32m[+] %s\033[0m\n' "$*"; }
