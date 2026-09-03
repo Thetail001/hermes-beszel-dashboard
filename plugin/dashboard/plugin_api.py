@@ -518,6 +518,32 @@ def _iter_bucket_keys(bucket: str, offset: int, tz_offset_min: int) -> list[str]
     return [f"{year:04d}-{m:02d}" for m in range(1, 13)]
 
 
+def _bucket_window(bucket: str, offset: int, tz_offset_min: int) -> tuple[str, str]:
+    """Return the [start, end) UTC ISO window covered by a bucket page.
+
+    Mirrors _iter_bucket_keys' local-calendar framing (hour=day, day=month,
+    month=year, shifted by `offset`), so the WHERE range matches the bucket
+    keys exactly. Lets the aggregation skip the whole retention window when
+    the caller only wants one page of buckets.
+    """
+    tz = timezone(timedelta(minutes=tz_offset_min))
+    now_local = datetime.now(tz)
+    if bucket == "hour":
+        start = now_local.replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(days=offset)
+        end = start + timedelta(days=1)
+    elif bucket == "day":
+        total = now_local.year * 12 + (now_local.month - 1) + offset
+        year, month = divmod(total, 12)
+        month += 1
+        start = datetime(year, month, 1, tzinfo=tz)
+        end = datetime(year + (month == 12), month % 12 + 1, 1, tzinfo=tz)
+    else:  # month
+        year = now_local.year + offset
+        start = datetime(year, 1, 1, tzinfo=tz)
+        end = datetime(year + 1, 1, 1, tzinfo=tz)
+    return start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
+
+
 @router.get("/security/stats/timeseries")
 async def security_stats_timeseries(
     bucket: str = "hour",
@@ -545,11 +571,16 @@ async def security_stats_timeseries(
     fmt = _BUCKET_FMT[bucket]
     keys = _iter_bucket_keys(bucket, int(offset), tz_offset)
     mod = f"{tz_offset:+d} minutes"
+    start_utc, end_utc = _bucket_window(bucket, int(offset), tz_offset)
     # e.ts is an ISO string with an explicit offset; strftime normalises it to
     # UTC before applying the viewer's offset. `instr(ts,'T')>0` drops legacy
     # malformed rows that would otherwise bucket under a NULL key.
     mcond = " AND e.machine_id = ?" if machine_id else ""
     mparam = [machine_id] if machine_id else []
+    # Constrain the aggregation to the requested window so we don't bucket the
+    # whole retention range just to serve one chart page.
+    wcond = " AND julianday(e.ts) >= julianday(?) AND julianday(e.ts) < julianday(?)"
+    wparam = [start_utc, end_utc]
 
     conn = _sec_db()
     try:
@@ -557,9 +588,9 @@ async def security_stats_timeseries(
             f"SELECT strftime(?, e.ts, ?) AS b, COUNT(*) AS total, "
             f"COUNT(DISTINCT e.src_ip) AS uniq "
             f"FROM security_events e "
-            f"WHERE instr(e.ts, 'T') > 0 {mcond} "
+            f"WHERE instr(e.ts, 'T') > 0 {wcond} {mcond} "
             f"GROUP BY b",
-            (fmt, mod, *mparam),
+            (fmt, mod, *wparam, *mparam),
         ).fetchall()
         totals: dict[str, int] = {}
         uniq: dict[str, int] = {}
@@ -571,9 +602,9 @@ async def security_stats_timeseries(
         trows = conn.execute(
             f"SELECT strftime(?, e.ts, ?) AS b, e.event_type AS t, COUNT(*) AS c "
             f"FROM security_events e "
-            f"WHERE instr(e.ts, 'T') > 0 {mcond} "
+            f"WHERE instr(e.ts, 'T') > 0 {wcond} {mcond} "
             f"GROUP BY b, t",
-            (fmt, mod, *mparam),
+            (fmt, mod, *wparam, *mparam),
         ).fetchall()
         by_type: dict[str, dict[str, int]] = {}
         for r in trows:
