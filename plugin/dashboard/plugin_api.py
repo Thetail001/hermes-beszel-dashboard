@@ -1386,6 +1386,7 @@ def _validate_event(ev):
         ts_dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
         if ts_dt.tzinfo is None:
             ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+        ts_dt = ts_dt.astimezone(timezone.utc)  # 归一化 UTC：中心入库契约
     except ValueError:
         return None
     now = datetime.now(timezone.utc)

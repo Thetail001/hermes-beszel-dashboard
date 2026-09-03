@@ -377,7 +377,7 @@ def parse_nginx_line(line: str) -> Optional[dict]:
 
     ts = datetime.strptime(m.group("ts"), "%d/%b/%Y:%H:%M:%S %z")
     return {
-        "ts": ts.isoformat(),
+        "ts": ts.astimezone(timezone.utc).isoformat(),
         "event_type": event_type,
         "src_ip": m.group("ip"),
         "uri": uri[:500],
@@ -421,7 +421,7 @@ def parse_auth_line(line: str) -> Optional[dict]:
             if not is_public_ip(ip):
                 return None
             return {
-                "ts": m.group("ts"),
+                "ts": datetime.fromisoformat(m.group("ts")).astimezone(timezone.utc).isoformat(),
                 "event_type": event_type,
                 "src_ip": ip,
                 "username": pm.groupdict().get("user"),
