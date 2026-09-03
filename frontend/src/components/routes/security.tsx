@@ -232,7 +232,7 @@ function TypeDonut({ byType }: { byType: Record<string, number> }) {
 					<div key={type} className="flex items-center gap-2 text-xs">
 						<div className="h-2 w-2 rounded-full" style={{ backgroundColor: TYPE_COLORS[type] || "#666" }} />
 						<span className="capitalize">{type.replace("_", " ")}</span>
-						<span className="text-muted-foreground">{count}</span>
+						<span className="text-muted-foreground">{formatCount(count)}</span>
 					</div>
 				))}
 			</div>
@@ -1288,7 +1288,7 @@ function PaginationBar({
 	return (
 		<div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
 			<span className="text-xs text-muted-foreground">
-				{total} attacker{total === 1 ? "" : "s"}
+				{formatCount(total)} attacker{total === 1 ? "" : "s"}
 			</span>
 			<div className="ml-auto flex flex-wrap items-center gap-2">
 				<Button
