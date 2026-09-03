@@ -1621,9 +1621,25 @@ export default function SecurityPage() {
 		setBansPage(1)
 	}
 
-	const handleExport = (format: "json" | "csv") => {
+	const handleExport = async (format: "json" | "csv") => {
 		const qs = buildQueryString(filter)
-		window.open(`/api/plugins/beszel/security/export?${qs}&format=${format}`, "_blank")
+		const res = await fetch(`/api/plugins/beszel/security/export?${qs}&format=${format}`)
+		const total = res.headers.get("X-Total-Count")
+		const truncated = res.headers.get("X-Truncated") === "true"
+		if (truncated && total && !window.confirm(`Export truncated: only the first 10,000 of ${total} matching events will be exported. Continue?`)) {
+			return
+		}
+		const blob = await res.blob()
+		const url = URL.createObjectURL(blob)
+		const a = document.createElement("a")
+		const cd = res.headers.get("Content-Disposition") || ""
+		const m = cd.match(/filename="?([^";]+)"?/)
+		a.href = url
+		a.download = m ? m[1] : `security-events.${format}`
+		document.body.appendChild(a)
+		a.click()
+		a.remove()
+		URL.revokeObjectURL(url)
 	}
 
 	const handleRotate = (_days: number) => {

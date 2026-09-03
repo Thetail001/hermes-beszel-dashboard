@@ -178,6 +178,7 @@ class Pusher:
     """
 
     CHUNK = 500  # centre's _MAX_BATCH — never exceed it in one POST
+    MAX_BUFFER_BYTES = 100 * 1024 * 1024  # 断网缓存上限，防中心长期宕机时磁盘被撑满
 
     def __init__(self, center_url: str, token: str, machine_id: str,
                  buffer_path: Path, flush_interval: int = 30):
@@ -247,6 +248,13 @@ class Pusher:
 
     def _buffer(self, batch: list):
         try:
+            # Hard cap on the disk buffer: if the centre is down for a very long
+            # time, unbounded append would fill the disk. Drop new events (keep
+            # the already-buffered ones) once the cap is hit.
+            size = self.buffer_path.stat().st_size if self.buffer_path.exists() else 0
+            if size >= self.MAX_BUFFER_BYTES:
+                print(f"[push] buffer full ({size} bytes), dropping {len(batch)} events", file=sys.stderr)
+                return
             with open(self.buffer_path, "a") as f:
                 for e in batch:
                     f.write(json.dumps(e) + "\n")

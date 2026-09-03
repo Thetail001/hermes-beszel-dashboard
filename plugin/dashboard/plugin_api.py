@@ -810,6 +810,11 @@ async def security_export(
         }
         order = sort_map.get(sort, "ts DESC")
 
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM security_events WHERE {time_cond} {filters}",
+            params,
+        ).fetchone()[0]
+
         sql = f"""
             SELECT * FROM security_events
             WHERE {time_cond} {filters}
@@ -818,8 +823,16 @@ async def security_export(
         """
         rows = conn.execute(sql, params).fetchall()
         items = [dict(r) for r in rows]
+        truncated = total > len(items)
 
         ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        # X-Truncated / X-Total-Count let the UI warn before silently exporting
+        # a partial stream (the LIMIT 10000 hard cap).
+        export_headers = {
+            "Content-Disposition": f"attachment; filename=security-events-{ts}.{format}",
+            "X-Total-Count": str(total),
+            "X-Truncated": "true" if truncated else "false",
+        }
 
         if format == "csv":
             import csv
@@ -830,20 +843,13 @@ async def security_export(
                 writer.writeheader()
                 writer.writerows(items)
             content = output.getvalue()
-            return Response(
-                content=content,
-                media_type="text/csv",
-                headers={
-                    "Content-Disposition": f"attachment; filename=security-events-{ts}.csv"
-                },
-            )
+            return Response(content=content, media_type="text/csv", headers=export_headers)
 
         from fastapi.responses import JSONResponse
         return JSONResponse(
-            content={"items": items, "count": len(items), "exported_at": datetime.now(timezone.utc).isoformat()},
-            headers={
-                "Content-Disposition": f"attachment; filename=security-events-{ts}.json"
-            },
+            content={"items": items, "count": len(items), "total": total, "truncated": truncated,
+                     "exported_at": datetime.now(timezone.utc).isoformat()},
+            headers=export_headers,
         )
     finally:
         conn.close()
