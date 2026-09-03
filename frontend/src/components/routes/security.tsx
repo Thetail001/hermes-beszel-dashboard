@@ -1635,7 +1635,7 @@ export default function SecurityPage() {
 	return (
 		<div className="space-y-4">
 			{/* Header */}
-			<div className="flex items-center justify-between">
+			<div className="sticky top-0 z-10 bg-background flex items-center justify-between">
 				<h1 className="text-2xl font-semibold tracking-tight">
 					<Trans>Security</Trans>
 				</h1>
