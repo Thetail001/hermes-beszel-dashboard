@@ -14,7 +14,7 @@
 不 fork beszel——前端源码 vendor 进本仓库（上游源码进 git 历史，我们的魔改 commit 在其上）；后端以插件 API 形式挂载，beszel 原有功能（系统指标、agent 通道、机器管理）原样保留。
 
 ```
- 各 VPS:   beszel-agent(资源指标) + security-collector(安全事件)
+各 VPS:   beszel-agent(资源指标) + security-collector(安全事件)
                           │ ws                │ https POST /security/ingest
                           ▼                   ▼
 控制机:            beszel hub(PocketBase)   token 认证 + 幂等去重 + GeoIP

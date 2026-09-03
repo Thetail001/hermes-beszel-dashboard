@@ -14,7 +14,7 @@
 No fork of beszel — the front-end is vendored (upstream source tracked in git history, our modifications committed on top); the back-end mounts as a plugin API, so beszel's own features (system metrics, agent channel, machine management) are kept untouched.
 
 ```
-VPSes ():  beszel-agent (metrics)  + security-collector (security events)
+VPSes:  beszel-agent (metrics)  + security-collector (security events)
                           │ ws                │ https POST /security/ingest
                           ▼                   ▼
 Control host:      beszel hub (PocketBase)   token auth + idempotent UPSERT + GeoIP
