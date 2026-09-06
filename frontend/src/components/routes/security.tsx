@@ -1436,6 +1436,8 @@ export default function SecurityPage() {
 	const fetchSeqRef = useRef(0)
 	const pendingCountRef = useRef(0)
 	const bansSeqRef = useRef(0)
+	const mapSeqRef = useRef(0) // fetchMap（地图 attackers 模式）竞态防护
+	const mapBansSeqRef = useRef(0) // fetchMapBans（地图 bans 模式）竞态防护
 
 	// Pagination (attackers list only — deliberately NOT part of buildQueryString,
 	// so it never leaks into events/export/summary, which must stay unpaginated)
@@ -1458,6 +1460,8 @@ export default function SecurityPage() {
 	// Map-specific filter (independent of the attacker list)
 	const [mapPeriod, setMapPeriod] = useState("24h")
 	const [mapLimit, setMapLimit] = useState(1000)
+	// 地图 bans 模式的全量 active bans——独立于列表的 ip/jail 筛选与分页，翻列表页不影响地图
+	const [mapBans, setMapBans] = useState<Ban[]>([])
 
 	// Filter state
 	const [filter, setFilter] = useState<FilterState>({
@@ -1577,11 +1581,30 @@ export default function SecurityPage() {
 
 	// Map data source — independent of the attacker list filter.
 	const fetchMap = () => {
+		const seq = ++mapSeqRef.current
 		const p = new URLSearchParams({ period: mapPeriod, limit: String(mapLimit) })
 		if (filter.machine_id) p.set("machine_id", filter.machine_id)
 		fetch(`/api/plugins/beszel/security/events?${p}`)
 			.then((r) => r.json())
-			.then((d) => setEvents(d.items || []))
+			.then((d) => {
+				if (seq !== mapSeqRef.current) return
+				setEvents(d.items || [])
+			})
+			.catch(() => {})
+	}
+
+	// Map bans mode — full active bans, independent of the bans list pagination/filter.
+	// 地图的 bans 模式显示「全部当前 active bans」(period=all)，不受列表 ip/jail 筛选和分页影响。
+	const fetchMapBans = () => {
+		const seq = ++mapBansSeqRef.current
+		const p = new URLSearchParams({ period: "all", limit: "500" })
+		if (filter.machine_id) p.set("machine_id", filter.machine_id)
+		fetch(`/api/plugins/beszel/security/bans/current?${p}`)
+			.then((r) => r.json())
+			.then((d) => {
+				if (seq !== mapBansSeqRef.current) return
+				setMapBans(d.items || [])
+			})
 			.catch(() => {})
 	}
 
@@ -1592,6 +1615,8 @@ export default function SecurityPage() {
 	fetchBansRef.current = fetchBans
 	const fetchMapRef = useRef(fetchMap)
 	fetchMapRef.current = fetchMap
+	const fetchMapBansRef = useRef(fetchMapBans)
+	fetchMapBansRef.current = fetchMapBans
 
 	// Initial load + filter changes
 	useEffect(() => {
@@ -1608,6 +1633,11 @@ export default function SecurityPage() {
 		fetchMap()
 	}, [mapPeriod, mapLimit, filter.machine_id])
 
+	// Map bans: refetch on machine change (full active bans, independent of map period/limit)
+	useEffect(() => {
+		fetchMapBans()
+	}, [filter.machine_id])
+
 	// Auto-refresh polling
 	useEffect(() => {
 		if (refreshInterval <= 0) return
@@ -1615,6 +1645,7 @@ export default function SecurityPage() {
 			fetchDataRef.current(true) // silent：静默更新，不触发 loading，不打断浏览
 			fetchBansRef.current()
 			fetchMapRef.current()
+			fetchMapBansRef.current()
 		}, refreshInterval * 1000)
 		return () => clearInterval(id)
 	}, [refreshInterval])
@@ -1834,7 +1865,7 @@ export default function SecurityPage() {
 				<CardContent>
 					<AttackMap
 						events={events}
-						bans={bans}
+						bans={mapBans}
 						machines={machines}
 						effectLevel={effectLevel}
 						selectedMachineId={filter.machine_id}
@@ -2236,6 +2267,7 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 					← <Trans>Back</Trans>
 				</Button>
 				<h1 className="text-2xl font-semibold tracking-tight font-mono">{ip}</h1>
+				<span className="text-xs text-muted-foreground"><Trans>All machines · All time</Trans></span>
 				{geo && (
 					<div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
 						{geo.country && <Badge variant="outline">{geo.country}</Badge>}
