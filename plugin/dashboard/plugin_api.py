@@ -1189,6 +1189,15 @@ def _auto_rotate_loop():
             print(f"[beszel] auto-rotate failed: {e}", flush=True)
 
 
+# 启动时主动跑一次迁移：P1-6 的单列→复合索引迁移在 _sec_db() 内惰性执行，若等到
+# 首次 API 请求才触发，期间两台机器可能用相同 event_id 互相覆盖计数。这里手动触发一次。
+try:
+    _mig_conn = _sec_db()
+    _mig_conn.close()
+except Exception as _me:  # pragma: no cover
+    import logging
+    logging.getLogger(__name__).warning("security db migration at startup failed: %s", _me)
+
 threading.Thread(target=_auto_rotate_loop, daemon=True, name="beszel-auto-rotate").start()
 
 
