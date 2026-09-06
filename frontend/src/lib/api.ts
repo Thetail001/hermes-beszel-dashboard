@@ -5,7 +5,6 @@ import { toast } from "@/components/ui/use-toast"
 import type { ChartTimes, UserSettings } from "@/types"
 import { $alerts, $allSystemsById, $allSystemsByName, $userSettings } from "./stores"
 import { chartTimeData } from "./utils"
-import * as systemsManager from "./systemsManager"
 
 /** PocketBase JS Client */
 export const pb = new PocketBase(basePath)
@@ -24,9 +23,13 @@ export const verifyAuth = () => {
 		.catch(() => {
 			fetch("/api/plugins/beszel/auto-auth", { credentials: "include" })
 				.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
-				.then(({ token, record }) => {
+				.then(async ({ token, record }) => {
 					pb.authStore.save(token, record)
-					systemsManager.refresh()
+					// 动态 import 避免 api.ts ↔ systemsManager 循环依赖（TDZ）：
+					// systemsManager 顶层 import { pb } from api，若 api 顶层再 import systemsManager
+					// 会成环，加载顺序不利时 systemsManager 顶层访问 pb 触发 TDZ 白屏。
+					const { refresh } = await import("./systemsManager")
+					refresh()
 				})
 				.catch(() => {
 					logOut()
