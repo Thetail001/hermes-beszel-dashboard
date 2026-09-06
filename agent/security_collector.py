@@ -220,10 +220,21 @@ class Pusher:
                     self._windows[key] = ev
 
     def flush(self):
-        """Drain the current window + discrete queue and send. Called periodically."""
+        """Send *sealed* windows + the discrete queue.
+
+        Windows are keyed to a fixed 60s boundary (`wstart = now // 60 * 60`) but
+        flush runs every `flush_interval` (default 30s). Draining every window on
+        every flush would emit the same minute twice: the first drain carries
+        count=N, the second (same event_id) carries count=M, and the centre's
+        `MAX(old, new)` drops M. To emit each minute's full count exactly once we
+        only send windows whose minute is already over (sealed), and keep the
+        current minute accumulating in place.
+        """
+        now_minute = int(time.time() // 60)
         with self._lock:
-            batch = list(self._windows.values()) + self._discrete
-            self._windows = {}
+            sealed_keys = [k for k in self._windows if k[2] // 60 < now_minute]
+            sealed = [self._windows.pop(k) for k in sealed_keys]
+            batch = sealed + self._discrete
             self._discrete = []
         if batch:
             self._send(batch)
@@ -613,45 +624,54 @@ class Collector:
         )
         self.conn.commit()
 
+    def _tail_file(self, path: Path, parse_fn):
+        """Robustly tail a log file across rotation / truncation / recreation.
+
+        Tracks the opened file's inode so logrotate (rename + create new) is
+        detected and the new file is picked up; rewinds on truncation (size
+        shrink); and waits for a missing file to reappear instead of killing the
+        thread (which would leave the service "running" but silently dead).
+        """
+        while True:
+            try:
+                with open(path, "r", errors="replace") as f:
+                    st = os.fstat(f.fileno())
+                    ino = (st.st_dev, st.st_ino)
+                    f.seek(0, 2)  # start at end
+                    while True:
+                        line = f.readline()
+                        if not line:
+                            try:
+                                cur = os.stat(path)
+                                if (cur.st_dev, cur.st_ino) != ino:
+                                    break          # rotated → reopen new file
+                                if cur.st_size < f.tell():
+                                    f.seek(0)      # truncated → rewind
+                                    continue
+                            except FileNotFoundError:
+                                break              # gone → wait for recreation
+                            time.sleep(0.5)
+                            continue
+                        ev = parse_fn(line)
+                        if ev:
+                            yield ev
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                print(f"[tail] {path}: {e}", file=sys.stderr)
+            time.sleep(1)
+
     def tail_nginx(self, path: Path):
         """Tail nginx access.log, yield parsed attack/scan events."""
-        with open(path, "r") as f:
-            f.seek(0, 2)  # SEEK_END
-            while True:
-                line = f.readline()
-                if not line:
-                    time.sleep(0.5)
-                    continue
-                ev = parse_nginx_line(line)
-                if ev:
-                    yield ev
+        yield from self._tail_file(path, parse_nginx_line)
 
     def tail_auth(self, path: Path):
         """Tail auth.log, yield parsed sshd auth events."""
-        with open(path, "r") as f:
-            f.seek(0, 2)
-            while True:
-                line = f.readline()
-                if not line:
-                    time.sleep(0.5)
-                    continue
-                ev = parse_auth_line(line)
-                if ev:
-                    yield ev
+        yield from self._tail_file(path, parse_auth_line)
 
     def tail_f2b(self, path: Path):
         """Tail fail2ban log, yield parsed events."""
-        # Start from end of file
-        with open(path, "r") as f:
-            f.seek(0, 2)  # SEEK_END
-            while True:
-                line = f.readline()
-                if not line:
-                    time.sleep(0.5)
-                    continue
-                ev = parse_f2b_line(line)
-                if ev:
-                    yield ev
+        yield from self._tail_file(path, parse_f2b_line)
 
     def update_geoip_db(self) -> bool:
         """Download the current-month dbip-city-lite if the loaded DB is from an older month.
