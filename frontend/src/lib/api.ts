@@ -5,6 +5,7 @@ import { toast } from "@/components/ui/use-toast"
 import type { ChartTimes, UserSettings } from "@/types"
 import { $alerts, $allSystemsById, $allSystemsByName, $userSettings } from "./stores"
 import { chartTimeData } from "./utils"
+import * as systemsManager from "./systemsManager"
 
 /** PocketBase JS Client */
 export const pb = new PocketBase(basePath)

@@ -386,7 +386,6 @@ const AllSystemsTable = memo(
 )
 
 function SystemsTableHead({ table }: { table: TableType<SystemRecord> }) {
-	const { t } = useLingui()
 	return (
 		<TableHeader className="sticky top-0 z-50 w-full border-b-2">
 			{table.getHeaderGroups().map((headerGroup) => (

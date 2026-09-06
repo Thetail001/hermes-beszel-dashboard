@@ -141,11 +141,19 @@ function formatCount(n: number | null | undefined): string {
 	return n.toLocaleString("en")
 }
 
+// datetime-local 的值是无时区的本地时间（YYYY-MM-DDTHH:MM），后端按 UTC 解析。
+// 提交前转成 UTC ISO，否则 UTC+8 用户的自定义时间窗口会偏 8 小时。
+function localToUTC(localStr: string): string {
+	if (!localStr) return localStr
+	const d = new Date(localStr)
+	return isNaN(d.getTime()) ? localStr : d.toISOString()
+}
+
 function buildQueryString(f: FilterState): string {
 	const p = new URLSearchParams()
 	if (f.period && f.period !== "custom") p.set("period", f.period)
-	if (f.start) p.set("start", f.start)
-	if (f.end) p.set("end", f.end)
+	if (f.start) p.set("start", localToUTC(f.start))
+	if (f.end) p.set("end", localToUTC(f.end))
 	if (f.type) p.set("type", f.type)
 	if (f.country) p.set("country", f.country)
 	if (f.asn) p.set("asn", f.asn)
@@ -2128,15 +2136,20 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 	const [geo, setGeo] = useState<any>(null)
 	const [loading, setLoading] = useState(true)
 	const [hasMore, setHasMore] = useState(false)
-	const [cursor, setCursor] = useState<string | null>(null)
+	const [cursor, setCursor] = useState<{ts: string; id: number} | null>(null)
 	// Expanded event IDs (individual control)
 	const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
 
-	const fetchTimeline = (before?: string) => {
+	const fetchTimeline = (before?: {ts: string; id: number}) => {
 		setLoading(true)
-		const url = before
-			? `/api/plugins/beszel/security/events?ip=${ip}&limit=50&before=${before}`
-			: `/api/plugins/beszel/security/events?ip=${ip}&limit=50`
+		// URLSearchParams handles the +00:00 timezone offset encoding; the cursor
+		// pairs (ts, id) so events sharing a timestamp aren't skipped on the next page.
+		const params = new URLSearchParams({ ip, limit: '50' })
+		if (before) {
+			params.set('before', before.ts)
+			params.set('before_id', String(before.id))
+		}
+		const url = `/api/plugins/beszel/security/events?${params.toString()}`
 		fetch(url)
 			.then((r) => r.json())
 			.then((d) => {
@@ -2147,7 +2160,8 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 				}
 				setHasMore(d.has_more || false)
 				if (d.items?.length > 0) {
-					setCursor(d.items[d.items.length - 1].ts)
+					const last = d.items[d.items.length - 1]
+					setCursor({ ts: last.ts, id: last.id })
 				}
 			})
 			.finally(() => setLoading(false))
