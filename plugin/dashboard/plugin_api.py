@@ -853,9 +853,16 @@ async def security_export(
             import io
             output = io.StringIO()
             if items:
-                writer = csv.DictWriter(output, fieldnames=items[0].keys())
+                # 防 CSV 公式注入：日志来源的文本字段若以 =+-@ 开头，加 ' 前缀，
+                # 否则在 Excel/表格软件里会被当作公式执行。
+                def _csv_safe(v):
+                    if isinstance(v, str) and v and v[0] in "=+-@\t\r":
+                        return "'" + v
+                    return v
+                safe_items = [{k: _csv_safe(v) for k, v in row.items()} for row in items]
+                writer = csv.DictWriter(output, fieldnames=safe_items[0].keys())
                 writer.writeheader()
-                writer.writerows(items)
+                writer.writerows(safe_items)
             content = output.getvalue()
             return Response(content=content, media_type="text/csv", headers=export_headers)
 
@@ -975,7 +982,8 @@ _beszel_auth_cache = {
     "ts": 0.0,
     "lock": threading.Lock(),
 }
-_AUTH_TTL = 60.0  # seconds
+_AUTH_TTL = 60.0  # seconds — how often we *try* to refresh
+_AUTH_MAX_STALE = 600.0  # seconds — cache older than this is rejected (fail-closed)
 
 
 def _refresh_beszel_auth():
@@ -1031,6 +1039,18 @@ def _refresh_beszel_auth():
         cache["ts"] = now
 
 
+def _auth_cache_fresh() -> bool:
+    """True while the cached token snapshot is within its max-stale window.
+
+    Refresh failures keep the old cache, but a revoked token must eventually
+    stop working: once the cache is older than ``_AUTH_MAX_STALE`` without a
+    successful refresh we treat it as invalid (fail closed) instead of trusting
+    it forever. An empty cache (ts == 0) is also stale, so an unreachable PB
+    rejects all ingests rather than letting any old token through.
+    """
+    return (time.time() - _beszel_auth_cache["ts"]) < _AUTH_MAX_STALE
+
+
 def _resolve_token(token: str) -> str | None:
     """Map a bearer token to a machine_id (or None if unknown).
 
@@ -1040,6 +1060,8 @@ def _resolve_token(token: str) -> str | None:
     _refresh_beszel_auth()
     with _beszel_auth_cache["lock"]:
         cache = _beszel_auth_cache
+        if not _auth_cache_fresh():
+            return None  # cache too stale (refresh failing) → fail closed
         if token in cache["universal_tokens"]:
             return "authenticated-agent"
         return cache["per_system"].get(token)
@@ -1048,6 +1070,8 @@ def _resolve_token(token: str) -> str | None:
 def _is_known_system(name: str) -> bool:
     _refresh_beszel_auth()
     with _beszel_auth_cache["lock"]:
+        if not _auth_cache_fresh():
+            return False
         return name in _beszel_auth_cache["systems"]
 
 
