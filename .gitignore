@@ -1,6 +1,7 @@
 node_modules/
 plugin/dashboard/dist/assets/
 plugin/dashboard/dist/index.html
+plugin/dashboard/dist/countries-50m.json
 hub/beszel
 hub/beszel_data/
 *.db
