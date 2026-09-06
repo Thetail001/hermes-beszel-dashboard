@@ -165,7 +165,7 @@ cd frontend
 npm install && npm run build
 
 # Release a new version (build dist → package → create GitHub Release)
-scripts/release.sh v0.2.1 "release notes"
+scripts/release.sh v0.2.2 "release notes"
 ```
 
 > The front-end source is vendored from [henrygd/beszel](https://github.com/henrygd/beszel) `internal/site` (baseline commit in `frontend/VENDOR.md`). Our modifications are committed directly on top of the vendor baseline — to review upstream changes, diff `internal/site` against `frontend/`.

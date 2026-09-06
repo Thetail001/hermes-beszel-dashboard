@@ -165,7 +165,7 @@ cd frontend
 npm install && npm run build
 
 # 发布新版本（构建 dist → 打包 → 创建 GitHub Release）
-scripts/release.sh v0.2.1 "版本说明"
+scripts/release.sh v0.2.2 "版本说明"
 ```
 
 > 前端源码 vendor 自 [henrygd/beszel](https://github.com/henrygd/beszel) 的 `internal/site`（基线 commit 见 `frontend/VENDOR.md`）。我们的魔改直接 commit 在 vendor 基线之上，上游更新时 diff `internal/site` 与 `frontend/` 即可看到上游改动。
