@@ -168,7 +168,12 @@ function parseQueryInput(input: string): Partial<FilterState> {
 	const out: Partial<FilterState> = {}
 	const parts = input.trim().split(/\s+/)
 	for (const part of parts) {
-		const [key, val] = part.split(":", 2)
+		// split on the FIRST colon only — IPv6 values like ip:2606:4700::abcd
+		// must keep their colons intact.
+		const idx = part.indexOf(":")
+		if (idx <= 0) continue
+		const key = part.slice(0, idx)
+		const val = part.slice(idx + 1)
 		if (!val) continue
 		if (key === "ip") out.ip = val
 		if (key === "type") out.type = val
@@ -2175,11 +2180,18 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 			.catch(() => {})
 	}, [ip])
 
-	// Group consecutive same-type events (but keep individual IDs for expansion)
+	// Group consecutive same-type events (but keep individual IDs for expansion).
+	// machine_id is part of the grouping key — two machines' identical events
+	// must not collapse into a single row attributed to one machine.
 	const grouped: Array<SecurityEvent & { count: number; ids: number[] }> = []
 	for (const ev of events) {
 		const last = grouped[grouped.length - 1]
-		if (last && last.event_type === ev.event_type && last.jail === ev.jail) {
+		if (
+			last &&
+			last.event_type === ev.event_type &&
+			last.jail === ev.jail &&
+			last.machine_id === ev.machine_id
+		) {
 			last.count += ev.count || 1
 			last.ids.push(ev.id)
 		} else {
