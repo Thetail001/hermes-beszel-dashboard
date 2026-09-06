@@ -1697,10 +1697,13 @@ async def security_machines():
                 "country": country, "city": city, "lat": lat, "lon": lon,
             })
     except Exception as e:
-        # PB unreachable → degrade to local machine so the UI still renders
+        # PB unreachable → return a degraded marker, NOT a fake "up" machine.
+        # status "degraded" + a top-level _error lets the UI show the failure
+        # instead of silently presenting a healthy-looking local machine.
         machines = [{
-            "id": "local", "name": "local", "host": "", "status": "up",
+            "id": "local", "name": "local", "host": "", "status": "degraded",
             "country": None, "city": None, "lat": None, "lon": None,
             "_error": str(e),
         }]
+        return {"items": machines, "_error": str(e)}
     return {"items": machines}

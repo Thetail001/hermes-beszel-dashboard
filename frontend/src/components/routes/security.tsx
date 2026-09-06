@@ -1427,6 +1427,7 @@ export default function SecurityPage() {
 	const [bans, setBans] = useState<Ban[]>([])
 	const [summary, setSummary] = useState<Summary | null>(null)
 	const [machines, setMachines] = useState<Machine[]>([])
+	const [machinesError, setMachinesError] = useState<string | null>(null)
 	const [loading, setLoading] = useState(true)
 
 	// 静默刷新 + 竞态防护：
@@ -1532,6 +1533,7 @@ export default function SecurityPage() {
 				setAttackerTotal(at.total ?? (at.items || []).length)
 				setSummary(sm)
 				setMachines(mc.items || [])
+				setMachinesError(mc._error || null)
 			})
 			.catch(() => {
 				// 静默失败：保留旧数据。silent 刷新失败不应打扰用户，非 silent 失败也先兜住
@@ -1713,7 +1715,14 @@ export default function SecurityPage() {
 				</div>
 			</div>
 
-			{/* Snapshot cards: all-time, follow only the global machine filter */}
+			{/* Hub 故障警告：machines 接口返回 degraded/_error 时提示，而非假装机器正常 */}
+		{machinesError && (
+			<div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+				<Trans>Security data source unavailable</Trans>: {machinesError}
+			</div>
+		)}
+
+		{/* Snapshot cards: all-time, follow only the global machine filter */}
 			<div className="grid gap-4 md:grid-cols-3">
 				<Card>
 					<CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
