@@ -248,7 +248,7 @@ CREATE INDEX IF NOT EXISTS idx_events_ts ON security_events(ts);
 CREATE INDEX IF NOT EXISTS idx_events_ip ON security_events(src_ip);
 CREATE INDEX IF NOT EXISTS idx_events_type_ts ON security_events(event_type, ts);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id
-    ON security_events(event_id);
+    ON security_events(machine_id, event_id);
 CREATE INDEX IF NOT EXISTS idx_events_machine ON security_events(machine_id, ts);
 CREATE INDEX IF NOT EXISTS idx_events_ts_jd ON security_events(julianday(ts));
 
@@ -291,6 +291,20 @@ def _sec_db() -> sqlite3.Connection:
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_SEC_SCHEMA)
+    # P1-6 migration: the event_id unique index used to be single-column, which
+    # let two machines sharing an event_id overwrite each other's counts. Rebuild
+    # it as (machine_id, event_id) so idempotency is scoped per machine.
+    try:
+        idx_cols = [r[2] for r in conn.execute("PRAGMA index_info(idx_events_event_id)").fetchall()]
+        if idx_cols == ["event_id"]:
+            conn.execute("DROP INDEX idx_events_event_id")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_event_id "
+                "ON security_events(machine_id, event_id)"
+            )
+            conn.commit()
+    except Exception:
+        pass
     try:
         cols_sec = [r[1] for r in conn.execute("PRAGMA table_info(security_events)").fetchall()]
         if "city" not in cols_sec:
@@ -481,7 +495,7 @@ async def security_stats_summary(machine_id: str = ""):
         by_type = {
             r[0]: r[1]
             for r in conn.execute(
-                "SELECT event_type, COUNT(*) FROM security_events WHERE 1=1 "
+                "SELECT event_type, SUM(count) FROM security_events WHERE 1=1 "
                 + mcond + " GROUP BY event_type",
                 mparam,
             )
@@ -592,7 +606,7 @@ async def security_stats_timeseries(
     conn = _sec_db()
     try:
         rows = conn.execute(
-            f"SELECT strftime(?, e.ts, ?) AS b, COUNT(*) AS total, "
+            f"SELECT strftime(?, e.ts, ?) AS b, SUM(e.count) AS total, "
             f"COUNT(DISTINCT e.src_ip) AS uniq "
             f"FROM security_events e "
             f"WHERE instr(e.ts, 'T') > 0 {wcond} {mcond} "
@@ -607,7 +621,7 @@ async def security_stats_timeseries(
                 uniq[r["b"]] = r["uniq"]
 
         trows = conn.execute(
-            f"SELECT strftime(?, e.ts, ?) AS b, e.event_type AS t, COUNT(*) AS c "
+            f"SELECT strftime(?, e.ts, ?) AS b, e.event_type AS t, SUM(e.count) AS c "
             f"FROM security_events e "
             f"WHERE instr(e.ts, 'T') > 0 {wcond} {mcond} "
             f"GROUP BY b, t",
@@ -727,7 +741,7 @@ async def security_attackers(
                 COALESCE(e.org, g.org) as org,
                 COALESCE(e.lat, g.lat) as lat,
                 COALESCE(e.lon, g.lon) as lon,
-                COUNT(*) as total_events,
+                SUM(e.count) as total_events,
                 MAX(e.ts) as last_seen,
                 MIN(e.ts) as first_seen,
                 GROUP_CONCAT(DISTINCT e.event_type) as types,
@@ -1438,7 +1452,7 @@ def _ingest_one(conn: sqlite3.Connection, machine_id: str, ev: dict) -> bool:
         "(ts, machine_id, event_type, src_ip, jail, uri, ua, username, raw_excerpt, "
         " country, city, asn, org, lat, lon, count, burst, event_id) "
         "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-        "ON CONFLICT(event_id) DO UPDATE SET count = MAX(security_events.count, excluded.count)",
+        "ON CONFLICT(machine_id, event_id) DO UPDATE SET count = MAX(security_events.count, excluded.count)",
         (
             clean["ts"], machine_id, clean["event_type"], clean["src_ip"],
             clean["jail"], clean["uri"], clean["ua"], clean["username"],
@@ -1447,7 +1461,11 @@ def _ingest_one(conn: sqlite3.Connection, machine_id: str, ev: dict) -> bool:
         ),
     )
 
-    # fail2ban ban/unban also maintain the bans table (both ops are idempotent).
+    # fail2ban ban/unban also maintain the bans table. Both must be safe under
+    # replay and out-of-order delivery: the agent pushes new data before retrying
+    # its buffer, so an old unban can arrive after a newer ban (and vice versa).
+    ip = clean["src_ip"]
+    jail = clean["jail"] or ""
     if clean["event_type"] == "ban":
         row = conn.execute(
             "SELECT id FROM security_events WHERE event_id = ?", (clean["event_id"],)
@@ -1455,14 +1473,32 @@ def _ingest_one(conn: sqlite3.Connection, machine_id: str, ev: dict) -> bool:
         conn.execute(
             "INSERT OR IGNORE INTO security_bans (ip, jail, machine_id, banned_at, last_event_id) "
             "VALUES (?, ?, ?, ?, ?)",
-            (clean["src_ip"], clean["jail"] or "", machine_id, clean["ts"],
-             row[0] if row else None),
+            (ip, jail, machine_id, clean["ts"], row[0] if row else None),
         )
+        # A ban that arrives *after* a later unban (out-of-order) would otherwise
+        # show up as a phantom "Active Ban". Close it immediately using the
+        # earliest unban at-or-after this ban's time.
+        later = conn.execute(
+            "SELECT MIN(ts) FROM security_events "
+            "WHERE event_type = 'unban' AND src_ip = ? AND jail = ? AND machine_id = ? "
+            "AND julianday(ts) >= julianday(?)",
+            (ip, jail, machine_id, clean["ts"]),
+        ).fetchone()
+        if later and later[0]:
+            conn.execute(
+                "UPDATE security_bans SET unbanned_at = ? "
+                "WHERE ip = ? AND jail = ? AND machine_id = ? AND banned_at = ? "
+                "AND unbanned_at IS NULL",
+                (later[0], ip, jail, machine_id, clean["ts"]),
+            )
     elif clean["event_type"] == "unban":
+        # Only close bans that started at-or-before this unban; never let a
+        # replayed old unban close a ban that started after it.
         conn.execute(
             "UPDATE security_bans SET unbanned_at = ? "
-            "WHERE ip = ? AND jail = ? AND machine_id = ? AND unbanned_at IS NULL",
-            (clean["ts"], clean["src_ip"], clean["jail"] or "", machine_id),
+            "WHERE ip = ? AND jail = ? AND machine_id = ? AND unbanned_at IS NULL "
+            "AND julianday(banned_at) <= julianday(?)",
+            (clean["ts"], ip, jail, machine_id, clean["ts"]),
         )
     return True
 
