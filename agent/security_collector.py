@@ -304,12 +304,12 @@ class Pusher:
 F2B_RE = re.compile(
     r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ "
     r"fail2ban\.actions\s+\[\d+\]: NOTICE\s+\[(?P<jail>[\w\-]+)\] "
-    r"(?P<action>Ban|Unban) (?P<ip>[\d\.:]+)"
+    r"(?P<action>Ban|Unban) (?P<ip>[0-9a-fA-F.:]+)"
 )
 
 # nginx access.log combined format
 NGINX_RE = re.compile(
-    r"^(?P<ip>[\d\.:]+) - - \[(?P<ts>[^\]]+)\] "
+    r"^(?P<ip>[0-9a-fA-F.:]+) - - \[(?P<ts>[^\]]+)\] "
     r'"(?P<method>\w+) (?P<uri>[^ ]+) [^"]*" '
     r"(?P<status>\d{3}) (?P<bytes>\d+|-) "
     r'"(?P<referer>[^"]*)" "(?P<ua>[^"]*)"'
@@ -369,30 +369,38 @@ def parse_nginx_line(line: str) -> Optional[dict]:
     uri = m.group("uri")
     ua = m.group("ua").lower()
 
-    # only 4xx/5xx are interesting
-    if status < 400:
-        return None
-
-    # skip noise paths
+    # skip noise paths (always noise, even on 4xx)
     for skip in NGINX_SKIP_PATHS:
         if uri.startswith(skip):
             return None
 
-    # classify
+    # Classify dangerous requests BEFORE the status filter, so a scanner probing
+    # a sensitive path (/.env, /admin...) or using a scanner UA (sqlmap...) is
+    # caught even when the server answers 200/3xx. Blind scanners that only ever
+    # get redirects were previously invisible here.
     event_type = "scan"
+    dangerous = False
     for frag in NGINX_ATTACK_UAS:
         if frag in ua:
             event_type = "attack"
+            dangerous = True
             break
     else:
         for frag in NGINX_SCAN_PATHS:
             if frag in uri.lower():
                 event_type = "scan"
+                dangerous = True
                 break
 
-    # TLS garbage / empty URI → generic 400
+    # TLS garbage / empty URI → protocol anomaly
     if not uri or uri == "-" or "\\x" in uri:
-        event_type = "attack"  # protocol anomaly
+        event_type = "attack"
+        dangerous = True
+
+    # Ordinary 2xx/3xx traffic is noise; record it only when the request itself
+    # was dangerous. Everything else still requires 4xx/5xx.
+    if status < 400 and not dangerous:
+        return None
 
     ts = datetime.strptime(m.group("ts"), "%d/%b/%Y:%H:%M:%S %z")
     return {
@@ -407,7 +415,7 @@ def parse_nginx_line(line: str) -> Optional[dict]:
 
 # ------------------------------------------------------------------ auth.log sshd
 AUTH_RE = re.compile(
-    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+[+-]\d{2}:\d{2})\s+"
+    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2})\s+"
     r"\S+\s+sshd\[\d+\]:\s+"
     r"(?P<msg>.*)$"
 )
@@ -425,6 +433,8 @@ AUTH_PATTERNS = [
     (re.compile(r"Connection (?:closed|reset) by (?:authenticating user (?P<user>\S+) )?(?P<ip>\S+) port \d+ \[preauth\]"), "auth_fail"),
     # Accepted password for root from 1.2.3.4 port 22
     (re.compile(r"Accepted password for (?P<user>\S+) from (?P<ip>\S+) port \d+"), "auth_success"),
+    # Accepted publickey for root from 1.2.3.4 port 22 ssh2: RSA SHA256:...
+    (re.compile(r"Accepted publickey for (?P<user>\S+) from (?P<ip>\S+) port \d+"), "auth_success"),
 ]
 
 
