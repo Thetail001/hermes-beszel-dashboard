@@ -46,10 +46,15 @@ info "  前端构建完成"
 
 # 把构建产物放进仓库的 plugin/dashboard/dist/（临时，用于打包）
 cd "$ROOT"
-rm -rf plugin/dashboard/dist/assets plugin/dashboard/dist/index.html
-cp -r "$SITE_DIR/dist/assets" plugin/dashboard/dist/
-cp "$SITE_DIR/dist/index.html" plugin/dashboard/dist/
-info "  构建产物已放入 plugin/dashboard/dist/"
+# 完整复制 Vite 产物：assets + index.html + public/ 下的 countries-50m.json（地图）、
+# static/ 等。loader.js 是插件专用文件（git 跟踪），不在 frontend/dist/ 里，要保留。
+rm -rf plugin/dashboard/dist/assets plugin/dashboard/dist/index.html \
+       plugin/dashboard/dist/countries-50m.json plugin/dashboard/dist/static
+cp -r "$SITE_DIR/dist/." plugin/dashboard/dist/
+# 打包前校验：地图数据 + 插件专用 loader 必须齐全，否则地图加载失败且前端静默降级成无地图。
+[ -f plugin/dashboard/dist/countries-50m.json ] || fail "构建产物缺少 countries-50m.json（地图数据）"
+[ -f plugin/dashboard/dist/loader.js ] || fail "构建产物缺少 loader.js（插件专用，须 git 跟踪）"
+info "  构建产物已放入 plugin/dashboard/dist/（含地图数据）"
 
 # ---------------------------------------------------------------- 2. 打包
 info "打包插件目录..."
