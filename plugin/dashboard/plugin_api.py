@@ -326,6 +326,7 @@ def _sec_db() -> sqlite3.Connection:
 async def security_events(
     limit: int = 1000,
     before: str = "",
+    before_id: int = 0,
     jail: str = "",
     ip: str = "",
     type: str = "",
@@ -337,9 +338,11 @@ async def security_events(
     Query params:
       limit:      page size (max _MAX_EVENTS)
       before:     ISO timestamp cursor (events older than this)
+      before_id:  secondary cursor id, paired with `before` so events sharing the
+                  same timestamp are not skipped (ties broken by id DESC)
       jail:       filter by fail2ban jail
       ip:         filter by source IP
-      type:       filter by event_type (ban|unban|attack|scan)
+      type:       filter by event_type
       machine_id: filter by machine (empty = all machines)
       period:     all (default) | 30m | 1h | 6h | 12h | 24h | 7d | 30d
     """
@@ -356,8 +359,12 @@ async def security_events(
     """
     params: list = []
     if before:
-        sql += " AND e.ts < ?"
-        params.append(before)
+        if before_id:
+            sql += " AND (e.ts < ? OR (e.ts = ? AND e.id < ?))"
+            params.extend([before, before, before_id])
+        else:
+            sql += " AND e.ts < ?"
+            params.append(before)
     if jail:
         sql += " AND e.jail = ?"
         params.append(jail)
@@ -376,15 +383,18 @@ async def security_events(
     if hours:
         sql += " AND julianday(e.ts) > julianday('now') - ?"
         params.append(hours / 24.0)
-    sql += " ORDER BY e.ts DESC LIMIT ?"
-    params.append(limit)
+    # Fetch limit+1 to compute has_more; tie-break by id so the cursor is stable.
+    sql += " ORDER BY e.ts DESC, e.id DESC LIMIT ?"
+    params.append(limit + 1)
 
     conn = _sec_db()
     try:
         rows = conn.execute(sql, params).fetchall()
+        has_more = len(rows) > limit
+        items = [dict(r) for r in rows[:limit]]
         return {
-            "items": [dict(r) for r in rows],
-            "has_more": len(rows) == limit,
+            "items": items,
+            "has_more": has_more,
         }
     finally:
         conn.close()
@@ -787,50 +797,56 @@ async def security_export(
     try:
         # julianday comparison — ts carries a tz offset, string compare skews.
         if start and end:
-            time_cond = "julianday(ts) >= julianday(?) AND julianday(ts) <= julianday(?)"
+            time_cond = "julianday(e.ts) >= julianday(?) AND julianday(e.ts) <= julianday(?)"
             params = [start, end]
         else:
             days = {"24h": 1, "7d": 7, "30d": 30}.get(period, 7)
-            time_cond = "julianday(ts) > julianday('now') - ?"
+            time_cond = "julianday(e.ts) > julianday('now') - ?"
             params: list = [days]
 
+        # Same filters as the Attackers list (which LEFT JOINs geo_cache), so the
+        # export mirrors the UI — a source enriched only after ingest must still
+        # be found by country/asn/org filters on both paths.
         filters = ""
         if type:
-            filters += " AND event_type = ?"
+            filters += " AND e.event_type = ?"
             params.append(type)
         if country:
-            filters += " AND country = ?"
-            params.append(country)
+            filters += " AND (e.country = ? OR g.country = ?)"
+            params.extend([country, country])
         if asn:
-            filters += " AND asn LIKE ?"
-            params.append(f"%{asn}%")
+            filters += " AND (e.asn LIKE ? OR g.asn LIKE ?)"
+            params.extend([f"%{asn}%", f"%{asn}%"])
         if org:
-            filters += " AND org LIKE ?"
-            params.append(f"%{org}%")
+            filters += " AND (e.org LIKE ? OR g.org LIKE ?)"
+            params.extend([f"%{org}%", f"%{org}%"])
         if ip:
-            filters += " AND src_ip = ?"
+            filters += " AND e.src_ip = ?"
             params.append(ip)
         if machine_id:
-            filters += " AND machine_id = ?"
+            filters += " AND e.machine_id = ?"
             params.append(machine_id)
 
         # Export is an event stream (not aggregated), so sort by event time.
         # Mirrors the attackers sort keys so the export follows the same
         # filtering/ordering intent as the UI.
         sort_map = {
-            "recent": "ts DESC",
-            "count": "count DESC",
-            "newest": "ts DESC",
+            "recent": "e.ts DESC",
+            "count": "e.count DESC",
+            "newest": "e.ts DESC",
         }
-        order = sort_map.get(sort, "ts DESC")
+        order = sort_map.get(sort, "e.ts DESC")
 
         total = conn.execute(
-            f"SELECT COUNT(*) FROM security_events WHERE {time_cond} {filters}",
+            f"SELECT COUNT(*) FROM security_events e "
+            f"LEFT JOIN geo_cache g ON e.src_ip = g.ip "
+            f"WHERE {time_cond} {filters}",
             params,
         ).fetchone()[0]
 
         sql = f"""
-            SELECT * FROM security_events
+            SELECT e.* FROM security_events e
+            LEFT JOIN geo_cache g ON e.src_ip = g.ip
             WHERE {time_cond} {filters}
             ORDER BY {order}
             LIMIT 10000
@@ -880,9 +896,13 @@ async def security_export(
 async def security_rotate(keep_days: int = 90):
     """Manually trigger event retention pruning.
 
-    Deletes events older than keep_days (default 90). The agent normally runs
-    this on a schedule; this lets the centre trigger it manually. Auth: session.
+    Deletes events older than keep_days (default 90). The centre also runs this
+    on a daily schedule (see _auto_rotate_loop) since push-mode agents don't
+    rotate locally. Auth: session.
     """
+    # keep_days must be a sane positive range — 0 would delete almost everything.
+    if keep_days < 1 or keep_days > 3650:
+        raise HTTPException(400, "keep_days must be between 1 and 3650")
     conn = _sec_db()
     try:
         cur = conn.execute(
@@ -1136,6 +1156,40 @@ try:
 except Exception as _e:  # pragma: no cover
     import logging
     logging.getLogger(__name__).warning("security ingest token-auth registration failed: %s", _e)
+
+
+# ---------------------------------------------------------------- auto-rotate (centre-side)
+# Push-mode agents don't run local retention pruning, so the centre owns a daily
+# 03:00 UTC cleanup. Without this the events table grows unbounded in the
+# recommended push deployment.
+_AUTO_ROTATE_KEEP_DAYS = 90
+
+
+def _auto_rotate_loop():
+    while True:
+        now = datetime.now(timezone.utc)
+        target = now.replace(hour=3, minute=0, second=0, microsecond=0)
+        if now >= target:
+            target = target + timedelta(days=1)
+        time.sleep(max((target - now).total_seconds(), 60))
+        try:
+            conn = _sec_db()
+            try:
+                cur = conn.execute(
+                    "DELETE FROM security_events "
+                    "WHERE julianday(ts) < julianday('now', ?)",
+                    (f"-{_AUTO_ROTATE_KEEP_DAYS} days",),
+                )
+                conn.commit()
+                if cur.rowcount:
+                    print(f"[beszel] auto-rotate deleted {cur.rowcount} events", flush=True)
+            finally:
+                conn.close()
+        except Exception as e:
+            print(f"[beszel] auto-rotate failed: {e}", flush=True)
+
+
+threading.Thread(target=_auto_rotate_loop, daemon=True, name="beszel-auto-rotate").start()
 
 
 # ---------------------------------------------------------------- geoip & asn (centre-side)
