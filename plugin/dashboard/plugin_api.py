@@ -424,7 +424,7 @@ async def security_bans_current(
       period:     all (default) | 24h | 7d | 30d | custom — filters on banned_at
       start/end:  ISO datetime (used when period=custom)
     """
-    limit = min(max(limit, 1), 500)
+    limit = min(max(limit, 1), 5000)
     offset = max(offset, 0)
     conn = _sec_db()
     try:
@@ -692,7 +692,7 @@ async def security_attackers(
       offset:    page offset (0-based)
       machine_id: filter by machine (empty = all machines)
     """
-    limit = min(max(limit, 1), 500)
+    limit = min(max(limit, 1), 5000)
     offset = max(offset, 0)
     conn = _sec_db()
     try:
@@ -1555,7 +1555,8 @@ def _ingest_one(conn: sqlite3.Connection, machine_id: str, ev: dict) -> bool:
     jail = clean["jail"] or ""
     if clean["event_type"] == "ban":
         row = conn.execute(
-            "SELECT id FROM security_events WHERE event_id = ?", (clean["event_id"],)
+            "SELECT id FROM security_events WHERE machine_id = ? AND event_id = ?",
+            (machine_id, clean["event_id"]),
         ).fetchone()
         conn.execute(
             "INSERT OR IGNORE INTO security_bans (ip, jail, machine_id, banned_at, last_event_id) "
