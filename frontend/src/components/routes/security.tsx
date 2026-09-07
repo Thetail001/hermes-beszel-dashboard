@@ -9,6 +9,7 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { geoEqualEarth, geoPath } from "d3-geo"
 import { feature } from "topojson-client"
+import { apiJson, localToUTC, splitKeyValue } from "@/lib/security-utils"
 
 // ---------------------------------------------------------------- types
 interface SecurityEvent {
@@ -139,29 +140,6 @@ function formatCount(n: number | null | undefined): string {
 		return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n)
 	}
 	return n.toLocaleString("en")
-}
-
-// datetime-local 的值是无时区的本地时间（YYYY-MM-DDTHH:MM），后端按 UTC 解析。
-// 提交前转成 UTC ISO，否则 UTC+8 用户的自定义时间窗口会偏 8 小时。
-function localToUTC(localStr: string): string {
-	if (!localStr) return localStr
-	const d = new Date(localStr)
-	return isNaN(d.getTime()) ? localStr : d.toISOString()
-}
-
-// 公共请求函数：检查 response.ok。500/网络错误抛出，而不是把错误 JSON 解析成空数据，
-// 否则接口故障会被渲染成"没有攻击者"。
-async function apiJson(url: string): Promise<any> {
-	const r = await fetch(url)
-	if (!r.ok) throw new Error(`HTTP ${r.status}`)
-	return r.json()
-}
-
-// 公共 key:value 分隔：只切第一个冒号，IPv6 值 ip:2606:4700::abcd 不会被截成 ip=2606。
-function splitKeyValue(part: string): [string, string] | null {
-	const idx = part.indexOf(":")
-	if (idx <= 0) return null
-	return [part.slice(0, idx), part.slice(idx + 1)]
 }
 
 function buildQueryString(f: FilterState): string {
