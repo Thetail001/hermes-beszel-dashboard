@@ -239,6 +239,28 @@ class Pusher:
         if batch:
             self._send(batch)
 
+    def flush_all(self):
+        """Shutdown drain: send every pending window, including the unsealed
+        current minute.
+
+        The current minute's event_id normally keys to its 60s boundary; a
+        restart within the same minute would reuse that id and the centre's
+        MAX(old,new) would drop the fresh count. Re-key continuous windows to an
+        exact-second shutdown id so they can't collide with a post-restart minute.
+        """
+        now_epoch = int(time.time())
+        with self._lock:
+            batch = list(self._windows.values()) + self._discrete
+            self._windows.clear()
+            self._discrete = []
+        for i, ev in enumerate(batch):
+            etype = ev["event_type"]
+            if etype not in ("ban", "unban"):
+                batch[i] = dict(ev)
+                batch[i]["event_id"] = f"{self.machine_id}:{etype}:{ev['src_ip']}:s{now_epoch}"
+        if batch:
+            self._send(batch)
+
     def _send(self, batch: list):
         try:
             for i in range(0, len(batch), self.CHUNK):
@@ -415,7 +437,8 @@ def parse_nginx_line(line: str) -> Optional[dict]:
 
 # ------------------------------------------------------------------ auth.log sshd
 AUTH_RE = re.compile(
-    r"^(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:\d{2})\s+"
+    r"^(?:(?P<ts>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[+-]\d{2}:\d{2}|Z))"
+    r"|(?P<syslog_ts>[A-Z][a-z]{2}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}))\s+"
     r"\S+\s+sshd\[\d+\]:\s+"
     r"(?P<msg>.*)$"
 )
@@ -442,6 +465,16 @@ def parse_auth_line(line: str) -> Optional[dict]:
     m = AUTH_RE.match(line.strip())
     if not m:
         return None
+    if m.group("ts"):
+        ts = datetime.fromisoformat(m.group("ts")).astimezone(timezone.utc).isoformat()
+    else:
+        # 传统 syslog 时间（如 "Sep  7 12:00:00"）：无年份、无时区。
+        # 推断为当前年份，若日期在未来（跨年日志）则回退一年；本地时区转 UTC。
+        now = datetime.now()
+        ts = datetime.strptime(f"{now.year} {m.group('syslog_ts')}", "%Y %b %d %H:%M:%S")
+        if ts > now:
+            ts = ts.replace(year=now.year - 1)
+        ts = ts.astimezone(timezone.utc).isoformat()
     msg = m.group("msg")
     for pattern, event_type in AUTH_PATTERNS:
         pm = pattern.search(msg)
@@ -450,7 +483,7 @@ def parse_auth_line(line: str) -> Optional[dict]:
             if not is_public_ip(ip):
                 return None
             return {
-                "ts": datetime.fromisoformat(m.group("ts")).astimezone(timezone.utc).isoformat(),
+                "ts": ts,
                 "event_type": event_type,
                 "src_ip": ip,
                 "username": pm.groupdict().get("user"),
@@ -637,24 +670,30 @@ class Collector:
     def _tail_file(self, path: Path, parse_fn):
         """Robustly tail a log file across rotation / truncation / recreation.
 
-        Tracks the opened file's inode so logrotate (rename + create new) is
-        detected and the new file is picked up; rewinds on truncation (size
-        shrink); and waits for a missing file to reappear instead of killing the
-        thread (which would leave the service "running" but silently dead).
+        - First open: seek to EOF (normal startup skips history).
+        - Rotation (inode change) / recreation: reopen and read from the START,
+          so lines already written into the new file aren't skipped.
+        - Truncation (size shrink): rewind within the same fd.
+        - A parse error on one line skips just that line — never forcing a
+          reopen that would re-scan the whole file.
         """
+        first_open = True
         while True:
             try:
                 with open(path, "r", errors="replace") as f:
                     st = os.fstat(f.fileno())
                     ino = (st.st_dev, st.st_ino)
-                    f.seek(0, 2)  # start at end
+                    if first_open:
+                        f.seek(0, 2)  # 首次启动：跳过历史
+                        first_open = False
+                    # 轮转/重开：从文件头读，不漏新文件已写的内容
                     while True:
                         line = f.readline()
                         if not line:
                             try:
                                 cur = os.stat(path)
                                 if (cur.st_dev, cur.st_ino) != ino:
-                                    break          # rotated → reopen new file
+                                    break          # rotated → 重开（从文件头读）
                                 if cur.st_size < f.tell():
                                     f.seek(0)      # truncated → rewind
                                     continue
@@ -662,7 +701,11 @@ class Collector:
                                 break              # gone → wait for recreation
                             time.sleep(0.5)
                             continue
-                        ev = parse_fn(line)
+                        try:
+                            ev = parse_fn(line)
+                        except Exception as e:
+                            print(f"[tail] {path}: parse error: {e}", file=sys.stderr)
+                            continue              # 跳过单行，不重开
                         if ev:
                             yield ev
             except FileNotFoundError:
@@ -865,6 +908,6 @@ if __name__ == "__main__":
         print("[collector] stopping, final flush", file=sys.stderr)
     finally:
         if pusher is not None:
-            pusher.flush()  # drain the remaining window on shutdown
+            pusher.flush_all()  # drain ALL windows (incl. current minute) on shutdown
         else:
             collector.conn.close()
