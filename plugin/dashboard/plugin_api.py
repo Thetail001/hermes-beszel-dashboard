@@ -34,6 +34,11 @@ CRED_FILE = Path(os.environ.get(
 # PB superuser identity; override via env — never commit real credentials.
 SUPERUSER_EMAIL = os.environ.get("BESZEL_SUPERUSER_EMAIL", "admin@example.com")
 
+# Test hook: skip background workers (auto-rotate + GeoIP updater) on import.
+# Tests set this so importing the module never spawns threads or touches the
+# network; production leaves it unset.
+_DISABLE_BACKGROUND = os.environ.get("BESZEL_DISABLE_BACKGROUND", "").lower() in ("1", "true", "yes")
+
 _token_cache = {"token": "", "exp": 0.0}
 
 
@@ -1198,7 +1203,8 @@ except Exception as _me:  # pragma: no cover
     import logging
     logging.getLogger(__name__).warning("security db migration at startup failed: %s", _me)
 
-threading.Thread(target=_auto_rotate_loop, daemon=True, name="beszel-auto-rotate").start()
+if not _DISABLE_BACKGROUND:
+    threading.Thread(target=_auto_rotate_loop, daemon=True, name="beszel-auto-rotate").start()
 
 
 # ---------------------------------------------------------------- geoip & asn (centre-side)
@@ -1387,8 +1393,9 @@ def _geoip_updater_loop():
 
 
 # Start background auto-updater thread
-_updater_thread = threading.Thread(target=_geoip_updater_loop, name="geoip-updater", daemon=True)
-_updater_thread.start()
+if not _DISABLE_BACKGROUND:
+    _updater_thread = threading.Thread(target=_geoip_updater_loop, name="geoip-updater", daemon=True)
+    _updater_thread.start()
 
 
 def _geoip_lookup(conn: sqlite3.Connection, ip: str):

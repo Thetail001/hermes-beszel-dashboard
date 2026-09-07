@@ -16,6 +16,7 @@ import ipaddress
 import json
 import os
 import re
+import signal
 import socket
 import sqlite3
 import sys
@@ -37,14 +38,21 @@ DB_PATH = Path(os.environ.get("SEC_DB_PATH", str(_SCRIPT_DIR / "security-events.
 # Push buffer: where failed pushes are buffered across restarts.
 BUFFER_FILE = Path(os.environ.get(
     "SEC_BUFFER_FILE", str(_SCRIPT_DIR / "security-push-buffer.jsonl")))
-FAIL2BAN_LOG = Path("/var/log/fail2ban.log")
-NGINX_LOG = Path("/var/log/nginx/access.log")
-AUTH_LOG = Path("/var/log/auth.log")
+FAIL2BAN_LOG = Path(os.environ.get("SEC_F2B_LOG", "/var/log/fail2ban.log"))
+NGINX_LOG = Path(os.environ.get("SEC_NGINX_LOG", "/var/log/nginx/access.log"))
+AUTH_LOG = Path(os.environ.get("SEC_AUTH_LOG", "/var/log/auth.log"))
 # GeoIP DB (legacy local mode; centre does GeoIP in push mode).
 GEOIP_DB = Path(os.environ.get("SEC_GEOIP_DB", str(_SCRIPT_DIR / "dbip-city-lite.mmdb")))
 # Machine identity: prefer env, then hostname. The beszel hub registers agents
 # by hostname, so the hostname is usually the right machine id.
 MACHINE_ID = os.environ.get("SEC_MACHINE_ID") or socket.gethostname()
+
+# Traditional syslog timestamps carry no year, so the year is inferred as the
+# current one — but only a *large* future gap means a year-crossing log line.
+# Small future skew is just clock error; the centre already tolerates up to 15
+# minutes of it (clock-skew guard in _validate_event). Rolling those lines back
+# a whole year would make the centre drop them as "older than 90 days".
+_SYSLOG_FUTURE_TOLERANCE = 15 * 60  # seconds; aligned with the centre's guard
 
 # ------------------------------------------------------------------ ip filter
 # Skip private/loopback/reserved ranges — they are never real attackers.
@@ -243,21 +251,33 @@ class Pusher:
         """Shutdown drain: send every pending window, including the unsealed
         current minute.
 
-        The current minute's event_id normally keys to its 60s boundary; a
-        restart within the same minute would reuse that id and the centre's
-        MAX(old,new) would drop the fresh count. Re-key continuous windows to an
-        exact-second shutdown id so they can't collide with a post-restart minute.
+        ID rules — wrong ids here lose counts to the centre's MAX(old,new)
+        upsert:
+        * Sealed windows (minute over) have never been sent (flush() pops them
+          on send), so they keep their original minute-boundary id untouched.
+        * The unsealed current-minute window is re-keyed to
+          `...:<wstart>:s<shutdown epoch>`: the plain minute id would collide
+          with the fresh window a same-minute restart creates, and a bare
+          `:s<epoch>` would collapse *different* minutes into one id. Keeping
+          wstart in the id makes both impossible.
+        * Discrete ban/unban ids are already unique (ts+hash); leave them.
+
+        The id is rewritten before buffering, so a failed send replays the same
+        id (retries stay idempotent; never regenerate per retry).
         """
         now_epoch = int(time.time())
+        now_minute_start = now_epoch // 60 * 60
         with self._lock:
-            batch = list(self._windows.values()) + self._discrete
+            win_items = list(self._windows.items())
             self._windows.clear()
-            self._discrete = []
-        for i, ev in enumerate(batch):
-            etype = ev["event_type"]
-            if etype not in ("ban", "unban"):
-                batch[i] = dict(ev)
-                batch[i]["event_id"] = f"{self.machine_id}:{etype}:{ev['src_ip']}:s{now_epoch}"
+            discrete, self._discrete = self._discrete, []
+        batch = []
+        for (etype, ip, wstart), ev in win_items:
+            if wstart >= now_minute_start:
+                ev = dict(ev)
+                ev["event_id"] = f"{self.machine_id}:{etype}:{ip}:{wstart}:s{now_epoch}"
+            batch.append(ev)
+        batch.extend(discrete)
         if batch:
             self._send(batch)
 
@@ -469,10 +489,12 @@ def parse_auth_line(line: str) -> Optional[dict]:
         ts = datetime.fromisoformat(m.group("ts")).astimezone(timezone.utc).isoformat()
     else:
         # 传统 syslog 时间（如 "Sep  7 12:00:00"）：无年份、无时区。
-        # 推断为当前年份，若日期在未来（跨年日志）则回退一年；本地时区转 UTC。
+        # 推断为当前年份；仅当日期明显在未来（跨年日志）才回退一年。
+        # 小幅超前是时钟偏差，交给中心的 15 分钟 clock-skew 容差处理，
+        # 不能直接回退成去年（会被中心按"超过 90 天"拒收）。
         now = datetime.now()
         ts = datetime.strptime(f"{now.year} {m.group('syslog_ts')}", "%Y %b %d %H:%M:%S")
-        if ts > now:
+        if ts > now + timedelta(seconds=_SYSLOG_FUTURE_TOLERANCE):
             ts = ts.replace(year=now.year - 1)
         ts = ts.astimezone(timezone.utc).isoformat()
     msg = m.group("msg")
@@ -902,12 +924,30 @@ if __name__ == "__main__":
         pusher = Pusher(args.center_url, token, MACHINE_ID, buffer_path, args.flush_interval)
 
     collector = Collector(DB_PATH, pusher=pusher)
+
+    # systemd stops/restarts the service with SIGTERM, whose default action
+    # kills the process outright — skipping the finally-drain below and losing
+    # the current-minute window plus any queued discrete events. Convert TERM
+    # (and INT) into KeyboardInterrupt so every shutdown path drains
+    # identically. Signal handlers run on the main thread, which is blocked in
+    # Thread.join() inside run(); join is interruptible, so the raise lands
+    # there and unwinds normally.
+    def _raise_keyboard_interrupt(signum, frame):
+        raise KeyboardInterrupt(f"signal {signum}")
+
+    signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
+    signal.signal(signal.SIGINT, _raise_keyboard_interrupt)
+
     try:
         collector.run()
     except KeyboardInterrupt:
         print("[collector] stopping, final flush", file=sys.stderr)
     finally:
         if pusher is not None:
-            pusher.flush_all()  # drain ALL windows (incl. current minute) on shutdown
+            try:
+                pusher.flush_all()  # drain ALL windows (incl. current minute) on shutdown
+            except Exception as e:
+                # Never let a flush failure abort the drain-to-disk path.
+                print(f"[collector] final flush error: {e}", file=sys.stderr)
         else:
             collector.conn.close()

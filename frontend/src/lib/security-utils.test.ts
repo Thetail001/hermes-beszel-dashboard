@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { localToUTC, splitKeyValue, apiJson } from "./security-utils"
+import { localToUTC, splitKeyValue, apiJson, createSeqGuard } from "./security-utils"
 
 describe("localToUTC", () => {
 	it("datetime-local 值转成带时区偏移的 ISO", () => {
@@ -41,5 +41,31 @@ describe("apiJson", () => {
 		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500 }))
 		await expect(apiJson("/x")).rejects.toThrow("HTTP 500")
 		vi.unstubAllGlobals()
+	})
+})
+
+describe("createSeqGuard", () => {
+	it("逆序响应：旧请求的晚到响应不得覆盖新数据（R3-04 切机器场景）", () => {
+		// 模拟：先选机器 A 再切到 B，B 的响应先回来、A 的慢响应后回来
+		const g = createSeqGuard()
+		const seqA = g.next() // 选 A
+		const seqB = g.next() // 切到 B
+
+		let buckets: string | null = null
+		// B 先返回 → 接受
+		if (g.isCurrent(seqB)) buckets = "B-data"
+		// A 后返回 → 必须被丢弃
+		if (g.isCurrent(seqA)) buckets = "A-data"
+
+		expect(buckets).toBe("B-data") // 最终状态属于最后选择的机器
+	})
+
+	it("同序响应：只认最后一次 next()", () => {
+		const g = createSeqGuard()
+		const s1 = g.next()
+		expect(g.isCurrent(s1)).toBe(true)
+		const s2 = g.next()
+		expect(g.isCurrent(s1)).toBe(false)
+		expect(g.isCurrent(s2)).toBe(true)
 	})
 })

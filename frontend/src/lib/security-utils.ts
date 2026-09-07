@@ -18,6 +18,20 @@ export async function apiJson(url: string): Promise<any> {
 	return r.json()
 }
 
+// 请求序号守卫（R3-04）：单调递增序号 + 过期响应丢弃。切换筛选/机器后，
+// 旧查询的慢响应不得覆盖新查询的数据——isCurrent 只认最后一次 next()。
+export function createSeqGuard() {
+	let current = 0
+	return {
+		next(): number {
+			return ++current
+		},
+		isCurrent(seq: number): boolean {
+			return seq === current
+		},
+	}
+}
+
 // 公共 key:value 分隔：只切第一个冒号，IPv6 值 ip:2606:4700::abcd 不会被截成 ip=2606。
 export function splitKeyValue(part: string): [string, string] | null {
 	const idx = part.indexOf(":")

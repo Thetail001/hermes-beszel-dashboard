@@ -9,7 +9,7 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { geoEqualEarth, geoPath } from "d3-geo"
 import { feature } from "topojson-client"
-import { apiJson, localToUTC, splitKeyValue } from "@/lib/security-utils"
+import { apiJson, createSeqGuard, localToUTC, splitKeyValue } from "@/lib/security-utils"
 
 // ---------------------------------------------------------------- types
 interface SecurityEvent {
@@ -286,8 +286,12 @@ function EventsChart({ machineId, refreshInterval }: { machineId: string; refres
 	const [metric, setMetric] = useState<ChartMetric>("events")
 	const [splitType, setSplitType] = useState(false)
 	const [buckets, setBuckets] = useState<TimeseriesBucket[]>([])
+	const [loadFailed, setLoadFailed] = useState(false)
+	// 请求序号守卫：切机器/bucket/翻页后，旧查询的慢响应不得覆盖新查询的数据（R3-04）。
+	const chartSeq = useRef(createSeqGuard()).current
 
 	const load = useCallback(() => {
+		const seq = chartSeq.next()
 		// Browser-local timezone offset (minutes east of UTC) keeps buckets
 		// aligned with the viewer's calendar days regardless of server TZ.
 		const tz = -new Date().getTimezoneOffset()
@@ -297,10 +301,16 @@ function EventsChart({ machineId, refreshInterval }: { machineId: string; refres
 			tz_offset: String(tz),
 		})
 		if (machineId) p.set("machine_id", machineId)
-		fetch(`/api/plugins/beszel/security/stats/timeseries?${p}`)
-			.then((r) => r.json())
-			.then((d) => setBuckets(d.buckets || []))
-			.catch(() => {})
+		apiJson(`/api/plugins/beszel/security/stats/timeseries?${p}`)
+			.then((d) => {
+				if (!chartSeq.isCurrent(seq)) return  // 过期响应丢弃
+				setBuckets(d.buckets || [])
+				setLoadFailed(false)
+			})
+			.catch(() => {
+				if (!chartSeq.isCurrent(seq)) return
+				setLoadFailed(true)  // 保留旧数据，不清空图表
+			})
 	}, [bucket, offset, machineId])
 
 	useEffect(() => {
@@ -342,7 +352,11 @@ function EventsChart({ machineId, refreshInterval }: { machineId: string; refres
 		<Card>
 			<CardHeader className="space-y-3">
 				<div className="flex flex-wrap items-center justify-between gap-3">
-					<CardTitle><Trans>Events</Trans></CardTitle>
+					<CardTitle><Trans>Events</Trans>{loadFailed && (
+						<span className="ml-2 align-middle text-xs font-normal text-amber-500">
+							{buckets.length ? "加载失败，显示旧数据" : "未取得数据"}
+						</span>
+					)}</CardTitle>
 					<div className="flex items-center gap-2">
 						<Button variant="outline" size="sm" className="h-7 w-7 p-0 text-xs" onClick={() => setOffset((o) => o - 1)}>
 							←
@@ -452,6 +466,8 @@ function AttackMap({
 	effectLevel,
 	selectedMachineId,
 	onSelectMachine,
+	mapMode,
+	onModeChange,
 }: {
 	events: SecurityEvent[]
 	bans: Ban[]
@@ -459,13 +475,16 @@ function AttackMap({
 	effectLevel: number
 	selectedMachineId?: string
 	onSelectMachine?: (id: string) => void
+	mapMode: "attackers" | "bans"
+	onModeChange: (m: "attackers" | "bans") => void
 }) {
 	const canvasRef = useRef<HTMLCanvasElement>(null)
 	const containerRef = useRef<HTMLDivElement>(null)
 	const [worldData, setWorldData] = useState<any>(null)
 
-	// Map visual mode: "attackers" or "bans"
-	const [mapMode, setMapMode] = useState<"attackers" | "bans">("attackers")
+	// mapMode 提升到父组件：地图控件区（Period/Show）要根据 mode 禁用无效控件、
+	// bans 模式显示截断标注（R3-06），所以 mode 不能再是这个组件的私有 state。
+	const setMapMode = onModeChange
 
 	// Viewport Pan & Zoom
 	const [zoom, setZoom] = useState(1.0)
@@ -1422,6 +1441,15 @@ export default function SecurityPage() {
 	const [staleData, setStaleData] = useState<string | null>(null)
 	const [loading, setLoading] = useState(true)
 
+	// 每个数据块独立的失败登记：失败时保留旧数据并记下块名，成功后清除，
+	// 顶部横幅统一展示。任何一块接口故障都不会被静默渲染成空数据（R3-03）。
+	const failedBlocksRef = useRef<Set<string>>(new Set())
+	const markBlock = (name: string, ok: boolean) => {
+		const s = failedBlocksRef.current
+		if (ok) s.delete(name); else s.add(name)
+		setStaleData(s.size ? `部分数据加载失败（${[...s].join("、")}），当前显示旧数据` : null)
+	}
+
 	// 静默刷新 + 竞态防护：
 	// - fetchSeqRef / bansSeqRef：请求序号，丢弃过期响应（用户改筛选时，慢的旧请求不得覆盖新数据）
 	// - pendingCountRef：进行中的"非静默"请求数，多个并发时正确管理 loading
@@ -1454,6 +1482,10 @@ export default function SecurityPage() {
 	const [mapLimit, setMapLimit] = useState(1000)
 	// 地图 bans 模式的全量 active bans——独立于列表的 ip/jail 筛选与分页，翻列表页不影响地图
 	const [mapBans, setMapBans] = useState<Ban[]>([])
+	const [mapBansTotal, setMapBansTotal] = useState(0) // 服务端 total，> mapBans.length 即被 5000 上限截断
+	// 地图模式（attackers/bans）放在这里而非 AttackMap 内部：控件区要根据 mode
+	// 禁用无效的 Period/Show，并给 bans 模式显示截断标注（R3-06）
+	const [mapMode, setMapMode] = useState<"attackers" | "bans">("attackers")
 
 	// Filter state
 	const [filter, setFilter] = useState<FilterState>({
@@ -1526,27 +1558,28 @@ export default function SecurityPage() {
 				// 过期响应（已有更新的请求发出）直接丢弃，避免旧数据覆盖新数据
 				if (seq !== fetchSeqRef.current) return
 				// 每个数据块独立处理：某块失败保留旧数据并标记，不把整页清空成"没有攻击者"
-				const failed: string[] = []
 				if (atR.status === "fulfilled") {
 					const at = atR.value
 					setAttackers(at.items || [])
 					setAttackerTotal(at.total ?? (at.items || []).length)
+					markBlock("攻击者列表", true)
 				} else {
-					failed.push("攻击者列表")
+					markBlock("攻击者列表", false)
 				}
 				if (smR.status === "fulfilled") {
 					setSummary(smR.value)
+					markBlock("概览", true)
 				} else {
-					failed.push("概览")
+					markBlock("概览", false)
 				}
 				if (mcR.status === "fulfilled") {
 					const mc = mcR.value
 					setMachines(mc.items || [])
 					setMachinesError(mc._error || null)
+					markBlock("机器列表", true)
 				} else {
-					failed.push("机器列表")
+					markBlock("机器列表", false)
 				}
-				setStaleData(failed.length ? `部分数据加载失败（${failed.join("、")}），当前显示旧数据` : null)
 			})
 			.catch(() => {
 				// 静默失败：保留旧数据。silent 刷新失败不应打扰用户，非 silent 失败也先兜住
@@ -1578,14 +1611,17 @@ export default function SecurityPage() {
 		p.set("limit", String(bansPageSize))
 		p.set("offset", String((bansPage - 1) * bansPageSize))
 		if (filter.machine_id) p.set("machine_id", filter.machine_id)
-		fetch(`/api/plugins/beszel/security/bans/current?${p}`)
-			.then((r) => r.json())
+		apiJson(`/api/plugins/beszel/security/bans/current?${p}`)
 			.then((d) => {
 				if (seq !== bansSeqRef.current) return
 				setBans(d.items || [])
 				setBansTotal(d.total ?? (d.items || []).length)
+				markBlock("封禁列表", true)
 			})
-			.catch(() => {})
+			.catch(() => {
+				if (seq !== bansSeqRef.current) return
+				markBlock("封禁列表", false)  // 保留旧数据，banner 提示
+			})
 	}
 
 	// Map data source — independent of the attacker list filter.
@@ -1593,28 +1629,36 @@ export default function SecurityPage() {
 		const seq = ++mapSeqRef.current
 		const p = new URLSearchParams({ period: mapPeriod, limit: String(mapLimit) })
 		if (filter.machine_id) p.set("machine_id", filter.machine_id)
-		fetch(`/api/plugins/beszel/security/events?${p}`)
-			.then((r) => r.json())
+		apiJson(`/api/plugins/beszel/security/events?${p}`)
 			.then((d) => {
 				if (seq !== mapSeqRef.current) return
 				setEvents(d.items || [])
+				markBlock("事件地图", true)
 			})
-			.catch(() => {})
+			.catch(() => {
+				if (seq !== mapSeqRef.current) return
+				markBlock("事件地图", false)
+			})
 	}
 
 	// Map bans mode — full active bans, independent of the bans list pagination/filter.
 	// 地图的 bans 模式显示「全部当前 active bans」(period=all)，不受列表 ip/jail 筛选和分页影响。
+	// 单页上限 5000：超出时 total > items.length，UI 明确标注截断（R3-06）。
 	const fetchMapBans = () => {
 		const seq = ++mapBansSeqRef.current
 		const p = new URLSearchParams({ period: "all", limit: "5000" })
 		if (filter.machine_id) p.set("machine_id", filter.machine_id)
-		fetch(`/api/plugins/beszel/security/bans/current?${p}`)
-			.then((r) => r.json())
+		apiJson(`/api/plugins/beszel/security/bans/current?${p}`)
 			.then((d) => {
 				if (seq !== mapBansSeqRef.current) return
 				setMapBans(d.items || [])
+				setMapBansTotal(d.total ?? (d.items || []).length)
+				markBlock("封禁地图", true)
 			})
-			.catch(() => {})
+			.catch(() => {
+				if (seq !== mapBansSeqRef.current) return
+				markBlock("封禁地图", false)
+			})
 	}
 
 	// 自动刷新用 ref 调用最新版 fetchData/fetchBans/fetchMap，避免 setInterval 闭包捕获旧 filter（stale closure）。
@@ -1837,7 +1881,9 @@ export default function SecurityPage() {
 							<select
 								value={mapPeriod}
 								onChange={(e) => setMapPeriod(e.target.value)}
-								className="h-7 rounded-md border bg-background px-2 text-xs"
+								disabled={mapMode === "bans"}
+								title={mapMode === "bans" ? "封禁模式固定显示全部当前封禁（period=all）" : undefined}
+								className="h-7 rounded-md border bg-background px-2 text-xs disabled:opacity-50"
 							>
 								<option value="30m">30 min</option>
 								<option value="1h">1 hour</option>
@@ -1853,7 +1899,9 @@ export default function SecurityPage() {
 							<select
 								value={mapLimit}
 								onChange={(e) => setMapLimit(Number(e.target.value))}
-								className="h-7 rounded-md border bg-background px-2 text-xs"
+								disabled={mapMode === "bans"}
+								title={mapMode === "bans" ? "封禁模式固定拉取前 5000 条" : undefined}
+								className="h-7 rounded-md border bg-background px-2 text-xs disabled:opacity-50"
 							>
 								<option value={500}>500</option>
 								<option value={1000}>1000</option>
@@ -1862,6 +1910,11 @@ export default function SecurityPage() {
 							</select>
 							<span className="text-xs text-muted-foreground">latest</span>
 						</div>
+						{mapMode === "bans" && mapBansTotal > mapBans.length && (
+							<span className="text-xs text-amber-500">
+								封禁地图截断：显示前 {mapBans.length.toLocaleString()} / 共 {mapBansTotal.toLocaleString()} 条
+							</span>
+						)}
 						<div className="flex items-center gap-2">
 							<Label className="text-xs"><Trans>Effects</Trans></Label>
 							<div className="flex gap-1">
@@ -1888,6 +1941,8 @@ export default function SecurityPage() {
 						effectLevel={effectLevel}
 						selectedMachineId={filter.machine_id}
 						onSelectMachine={(id) => setFilter((f) => ({ ...f, machine_id: id }))}
+						mapMode={mapMode}
+						onModeChange={setMapMode}
 					/>
 				</CardContent>
 			</Card>

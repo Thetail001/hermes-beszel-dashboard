@@ -4,12 +4,24 @@
 （P1-4）、ban last_event_id 跨机器串引用（P2-9）。用临时 SQLite + mock GeoIP，
 不碰生产库。
 """
+import atexit
+import os
+import shutil
 import sys
 import sqlite3
+import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+
+# R3-08: 导入 plugin_api 之前隔离运行环境——模块导入时会打开运行库做迁移、
+# 启动后台线程。全部指向临时目录并禁用后台 worker，测试绝不触碰真实运行路径。
+_TEST_TMP = Path(tempfile.mkdtemp())
+atexit.register(lambda: shutil.rmtree(_TEST_TMP, ignore_errors=True))
+os.environ["BESZEL_PLUGIN_DATA_DIR"] = str(_TEST_TMP)
+os.environ["BESZEL_SEC_DB"] = str(_TEST_TMP / "security-events.db")
+os.environ["BESZEL_DISABLE_BACKGROUND"] = "1"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "plugin" / "dashboard"))
 import plugin_api  # noqa: E402
@@ -86,17 +98,53 @@ class TestBanForeignRef(unittest.TestCase):
 
 
 class TestSchemaMigration(unittest.TestCase):
-    """P1-6: 旧单列 event_id 索引迁移为 (machine_id, event_id) 复合索引。"""
+    """P1-6/R3-07: 真跑迁移——旧单列 event_id 索引升级为 (machine_id, event_id)
+    复合索引。走生产代码的同一迁移入口（_sec_db），迁移实现被删掉时此测试必须红。"""
 
     def test_migration_rebuilds_composite_index(self):
-        # 建一个带旧单列索引的库，模拟升级前
-        conn = sqlite3.connect(":memory:")
+        db = _TEST_TMP / "migration-old.db"
+        if db.exists():
+            db.unlink()
+        # 旧库：完整 schema，但 event_id 索引是升级前的单列唯一索引
+        conn = sqlite3.connect(str(db))
         conn.executescript(plugin_api._SEC_SCHEMA)
         conn.execute("DROP INDEX idx_events_event_id")
         conn.execute("CREATE UNIQUE INDEX idx_events_event_id ON security_events(event_id)")
-        # 验证迁移逻辑（_sec_db 内的那一段）会重建复合索引
-        idx_cols = [r[2] for r in conn.execute("PRAGMA index_info(idx_events_event_id)").fetchall()]
-        self.assertEqual(idx_cols, ["event_id"])  # 旧单列
+        # 升级前已有数据，迁移后必须保留
+        conn.execute(
+            "INSERT INTO security_events (ts, machine_id, event_type, src_ip, event_id, count) "
+            "VALUES ('2026-09-01T00:00:00+00:00', 'A', 'scan', '1.2.3.4', 'pre-migration', 5)"
+        )
+        conn.commit()
+        conn.close()
+
+        idx_before = [r[2] for r in sqlite3.connect(str(db)).execute(
+            "PRAGMA index_info(idx_events_event_id)").fetchall()]
+        self.assertEqual(idx_before, ["event_id"])  # 前置：确实是旧单列索引
+
+        # 经生产代码使用的同一迁移入口升级
+        with patch.object(plugin_api, "SEC_DB", db):
+            mig = plugin_api._sec_db()
+        try:
+            idx_cols = [r[2] for r in mig.execute(
+                "PRAGMA index_info(idx_events_event_id)").fetchall()]
+            self.assertEqual(idx_cols, ["machine_id", "event_id"])  # 迁移成复合索引
+            # 升级前的记录保留
+            row = mig.execute(
+                "SELECT machine_id, count FROM security_events WHERE event_id='pre-migration'"
+            ).fetchone()
+            self.assertEqual((row[0], row[1]), ("A", 5))
+            # 迁移后两台机器相同 event_id 均可写入（跨机器隔离语义成立）
+            for m in ("A", "B"):
+                mig.execute(
+                    "INSERT INTO security_events (ts, machine_id, event_type, src_ip, event_id, count) "
+                    "VALUES ('2026-09-07T00:00:00+00:00', ?, 'scan', '5.6.7.8', 'shared', 1)", (m,))
+            mig.commit()
+            n = mig.execute(
+                "SELECT COUNT(*) FROM security_events WHERE event_id='shared'").fetchone()[0]
+            self.assertEqual(n, 2)
+        finally:
+            mig.close()
 
 
 if __name__ == "__main__":
