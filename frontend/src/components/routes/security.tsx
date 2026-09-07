@@ -149,6 +149,21 @@ function localToUTC(localStr: string): string {
 	return isNaN(d.getTime()) ? localStr : d.toISOString()
 }
 
+// 公共请求函数：检查 response.ok。500/网络错误抛出，而不是把错误 JSON 解析成空数据，
+// 否则接口故障会被渲染成"没有攻击者"。
+async function apiJson(url: string): Promise<any> {
+	const r = await fetch(url)
+	if (!r.ok) throw new Error(`HTTP ${r.status}`)
+	return r.json()
+}
+
+// 公共 key:value 分隔：只切第一个冒号，IPv6 值 ip:2606:4700::abcd 不会被截成 ip=2606。
+function splitKeyValue(part: string): [string, string] | null {
+	const idx = part.indexOf(":")
+	if (idx <= 0) return null
+	return [part.slice(0, idx), part.slice(idx + 1)]
+}
+
 function buildQueryString(f: FilterState): string {
 	const p = new URLSearchParams()
 	if (f.period && f.period !== "custom") p.set("period", f.period)
@@ -168,12 +183,9 @@ function parseQueryInput(input: string): Partial<FilterState> {
 	const out: Partial<FilterState> = {}
 	const parts = input.trim().split(/\s+/)
 	for (const part of parts) {
-		// split on the FIRST colon only — IPv6 values like ip:2606:4700::abcd
-		// must keep their colons intact.
-		const idx = part.indexOf(":")
-		if (idx <= 0) continue
-		const key = part.slice(0, idx)
-		const val = part.slice(idx + 1)
+		const kv = splitKeyValue(part)
+		if (!kv) continue
+		const [key, val] = kv
 		if (!val) continue
 		if (key === "ip") out.ip = val
 		if (key === "type") out.type = val
@@ -1411,7 +1423,8 @@ function RotationSettings({ onRotate }: { onRotate: (days: number) => void }) {
 					</div>
 					{lastResult && <div className="text-xs text-muted-foreground">{lastResult}</div>}
 					<div className="text-xs text-muted-foreground">
-						<Trans>Auto-rotation runs daily at 03:00 UTC.</Trans>
+						<Trans>Auto-rotation runs daily at 03:00 UTC, keeping the last 90 days.</Trans>{" "}
+						<Trans>Keep days above applies to manual deletion only.</Trans>
 					</div>
 				</CardContent>
 			)}
@@ -1428,6 +1441,7 @@ export default function SecurityPage() {
 	const [summary, setSummary] = useState<Summary | null>(null)
 	const [machines, setMachines] = useState<Machine[]>([])
 	const [machinesError, setMachinesError] = useState<string | null>(null)
+	const [staleData, setStaleData] = useState<string | null>(null)
 	const [loading, setLoading] = useState(true)
 
 	// 静默刷新 + 竞态防护：
@@ -1525,19 +1539,36 @@ export default function SecurityPage() {
 		const offset = (page - 1) * pageSize
 		// summary only reads machine_id — don't leak the attackers filter into it
 		const smQ = filter.machine_id ? `machine_id=${encodeURIComponent(filter.machine_id)}` : ""
-		Promise.all([
-			fetch(`/api/plugins/beszel/security/attackers?${qs}&limit=${pageSize}&offset=${offset}`).then((r) => r.json()),
-			fetch(`/api/plugins/beszel/security/stats/summary?${smQ}`).then((r) => r.json()),
-			fetch("/api/plugins/beszel/security/machines").then((r) => r.json()),
+		Promise.allSettled([
+			apiJson(`/api/plugins/beszel/security/attackers?${qs}&limit=${pageSize}&offset=${offset}`),
+			apiJson(`/api/plugins/beszel/security/stats/summary?${smQ}`),
+			apiJson("/api/plugins/beszel/security/machines"),
 		])
-			.then(([at, sm, mc]) => {
+			.then(([atR, smR, mcR]) => {
 				// 过期响应（已有更新的请求发出）直接丢弃，避免旧数据覆盖新数据
 				if (seq !== fetchSeqRef.current) return
-				setAttackers(at.items || [])
-				setAttackerTotal(at.total ?? (at.items || []).length)
-				setSummary(sm)
-				setMachines(mc.items || [])
-				setMachinesError(mc._error || null)
+				// 每个数据块独立处理：某块失败保留旧数据并标记，不把整页清空成"没有攻击者"
+				const failed: string[] = []
+				if (atR.status === "fulfilled") {
+					const at = atR.value
+					setAttackers(at.items || [])
+					setAttackerTotal(at.total ?? (at.items || []).length)
+				} else {
+					failed.push("攻击者列表")
+				}
+				if (smR.status === "fulfilled") {
+					setSummary(smR.value)
+				} else {
+					failed.push("概览")
+				}
+				if (mcR.status === "fulfilled") {
+					const mc = mcR.value
+					setMachines(mc.items || [])
+					setMachinesError(mc._error || null)
+				} else {
+					failed.push("机器列表")
+				}
+				setStaleData(failed.length ? `部分数据加载失败（${failed.join("、")}），当前显示旧数据` : null)
 			})
 			.catch(() => {
 				// 静默失败：保留旧数据。silent 刷新失败不应打扰用户，非 silent 失败也先兜住
@@ -1564,8 +1595,8 @@ export default function SecurityPage() {
 		if (bansFilter.jail) p.set("jail", bansFilter.jail)
 		p.set("sort", bansFilter.sort)
 		p.set("period", bansFilter.period)
-		if (bansFilter.start) p.set("start", bansFilter.start)
-		if (bansFilter.end) p.set("end", bansFilter.end)
+		if (bansFilter.start) p.set("start", localToUTC(bansFilter.start))
+		if (bansFilter.end) p.set("end", localToUTC(bansFilter.end))
 		p.set("limit", String(bansPageSize))
 		p.set("offset", String((bansPage - 1) * bansPageSize))
 		if (filter.machine_id) p.set("machine_id", filter.machine_id)
@@ -1597,7 +1628,7 @@ export default function SecurityPage() {
 	// 地图的 bans 模式显示「全部当前 active bans」(period=all)，不受列表 ip/jail 筛选和分页影响。
 	const fetchMapBans = () => {
 		const seq = ++mapBansSeqRef.current
-		const p = new URLSearchParams({ period: "all", limit: "500" })
+		const p = new URLSearchParams({ period: "all", limit: "5000" })
 		if (filter.machine_id) p.set("machine_id", filter.machine_id)
 		fetch(`/api/plugins/beszel/security/bans/current?${p}`)
 			.then((r) => r.json())
@@ -1658,7 +1689,9 @@ export default function SecurityPage() {
 	const handleBansQuerySubmit = () => {
 		const out: { ip: string; jail: string } = { ip: "", jail: "" }
 		for (const part of bansQuery.trim().split(/\s+/)) {
-			const [key, val] = part.split(":", 2)
+			const kv = splitKeyValue(part)
+			if (!kv) continue
+			const [key, val] = kv
 			if (!val) continue
 			if (key === "ip") out.ip = val
 			if (key === "jail") out.jail = val
@@ -1750,6 +1783,13 @@ export default function SecurityPage() {
 		{machinesError && (
 			<div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
 				<Trans>Security data source unavailable</Trans>: {machinesError}
+			</div>
+		)}
+
+		{/* 数据块加载失败警告：某块 500/网络错误时提示，而非清空成"没有攻击者" */}
+		{staleData && (
+			<div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-400">
+				{staleData}
 			</div>
 		)}
 
