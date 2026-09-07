@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  python-tests:
+    name: Python tests (agent + plugin)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install deps
+        run: pip install fastapi
+      - name: Run agent tests
+        run: python3 -m unittest tests.test_agent -v
+      - name: Run plugin tests
+        run: python3 -m unittest tests.test_plugin -v
+
+  frontend:
+    name: Frontend (test + typecheck + build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install deps
+        run: npm ci
+      - name: Run unit tests
+        run: npm test
+      - name: Typecheck + build (lingui compile → tsc -b → vite build)
+        run: npm run build:ci
