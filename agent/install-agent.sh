@@ -97,16 +97,29 @@ info "安装 security-collector（安全事件采集）..."
 AGENT_DIR="/opt/beszel-sec-agent"
 mkdir -p "$AGENT_DIR"
 
+# 更新检测：内容变了才替换并重启服务——「下载了新代码但服务还在跑旧代码」
+# 是最隐蔽的更新失败（自检 is-active 必然通过），必须显式处理。
+CHANGED=0
+
+TMP_COLLECTOR="$(mktemp)"
 curl -fsSL --max-time 30 \
   "https://raw.githubusercontent.com/$OUR_REPO/$OUR_BRANCH/agent/security_collector.py" \
-  -o "$AGENT_DIR/security_collector.py" || fail "下载 security_collector.py 失败"
+  -o "$TMP_COLLECTOR" || fail "下载 security_collector.py 失败"
+if ! cmp -s "$TMP_COLLECTOR" "$AGENT_DIR/security_collector.py" 2>/dev/null; then
+  mv "$TMP_COLLECTOR" "$AGENT_DIR/security_collector.py"
+  CHANGED=1
+  info "  security_collector.py 已更新"
+else
+  rm -f "$TMP_COLLECTOR"
+fi
 
 # token 复用 beszel 的（universal 或 per-system 均可，中心两种都认）
 printf '%s' "$TOKEN" > "$AGENT_DIR/agent_token.txt"
 chmod 600 "$AGENT_DIR/agent_token.txt"
 
-# 写 systemd unit
-cat > /etc/systemd/system/security-collector.service <<EOF
+# systemd unit：同样先写临时文件对比，变了才替换
+TMP_UNIT="$(mktemp)"
+cat > "$TMP_UNIT" <<EOF
 [Unit]
 Description=Beszel Security Event Collector
 After=network-online.target beszel-agent.service
@@ -128,9 +141,23 @@ SyslogIdentifier=beszel-security-collector
 [Install]
 WantedBy=multi-user.target
 EOF
+if ! cmp -s "$TMP_UNIT" /etc/systemd/system/security-collector.service 2>/dev/null; then
+  mv "$TMP_UNIT" /etc/systemd/system/security-collector.service
+  CHANGED=1
+  info "  systemd unit 已更新"
+else
+  rm -f "$TMP_UNIT"
+fi
 
 systemctl daemon-reload
-systemctl enable --now security-collector.service || fail "security-collector 启动失败"
+if systemctl is-active --quiet security-collector.service; then
+  if [ "$CHANGED" = "1" ]; then
+    systemctl restart security-collector.service || fail "security-collector 重启失败"
+    info "  配置/代码变更，已重启（SIGTERM 优雅排空，当前分钟数据不丢）"
+  fi
+else
+  systemctl enable --now security-collector.service || fail "security-collector 启动失败"
+fi
 
 # ---------------------------------------------------------------- 3. 自检
 sleep 3
