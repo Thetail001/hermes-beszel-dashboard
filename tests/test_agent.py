@@ -252,8 +252,8 @@ class TestSigtermDrain(unittest.TestCase):
     """R3-01: SIGTERM 必须走排空路径——真实子进程跑 __main__，注入合成事件，
     发 SIGTERM，验证事件送达中心（或断网时落盘）。"""
 
-    def _run_child(self, center_url, tmp, extra_env=None):
-        """起真实 agent 子进程：tail 临时日志，flush 间隔拉长防周期 flush 干扰。"""
+    def _run_child(self, center_url, tmp, extra_env=None, flush_interval=999):
+        """起真实 agent 子进程：tail 临时日志，flush 间隔默认拉长防周期 flush 干扰。"""
         import subprocess
         f2b_log = os.path.join(tmp, "fail2ban.log")
         open(f2b_log, "w").close()
@@ -272,7 +272,7 @@ class TestSigtermDrain(unittest.TestCase):
         script = str(Path(sc.__file__ or "").resolve())
         proc = subprocess.Popen(
             [sys.executable, script, "--push", "--center-url", center_url,
-             "--token", "t", "--flush-interval", "999"],
+             "--token", "t", "--flush-interval", str(flush_interval)],
             env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         time.sleep(1.2)  # 等 tail 完成首次 seek EOF
         return proc, f2b_log
@@ -340,6 +340,267 @@ class TestSigtermDrain(unittest.TestCase):
         self.assertTrue(os.path.exists(buf), "断网退出必须落盘缓冲")
         content = open(buf).read()
         self.assertIn("8.8.8.8", content)
+
+    def test_sigterm_during_inflight_send(self):
+        """R4-01 场景 A 端到端：周期 flush 已取走批次、中心 hang 住时 SIGTERM——
+        进程有界等待在途批次，中心返回 503 后批次落盘，不随 daemon 线程消失。"""
+        import http.server
+        received_req = threading.Event()
+        release = threading.Event()
+
+        class Hang(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                self.rfile.read(n)
+                received_req.set()
+                release.wait(30)  # 中心 hang，由测试放行
+                self.send_response(503)
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), Hang)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        tmp = tempfile.mkdtemp()
+        # flush-interval=1：周期 flush 真取走批次；shutdown_wait 缩短到 3s
+        proc, f2b_log = self._run_child(
+            f"http://127.0.0.1:{srv.server_port}/ingest", tmp,
+            extra_env={"SEC_SHUTDOWN_WAIT": "3"}, flush_interval=1)
+        try:
+            with open(f2b_log, "a") as f:
+                f.write("2026-09-07 12:00:00,123 fail2ban.actions [1]: "
+                        "NOTICE [sshd] Ban 9.9.9.9\n")
+            self.assertTrue(received_req.wait(8),
+                            "周期 flush 应取走批次并发到中心（中心 hang 住）")
+            proc.send_signal(signal.SIGTERM)
+            time.sleep(0.5)
+            self.assertIsNone(proc.poll(), "在途批次未确认前进程不应退出")
+            release.set()  # 中心返回 503 → flush 线程失败落盘 → inflight 清空
+            try:
+                rc = proc.wait(timeout=15)
+            except Exception:
+                proc.kill()
+                raise AssertionError("子进程未在 15s 内退出")
+        finally:
+            release.set()
+            srv.shutdown()
+            if proc.poll() is None:
+                proc.kill()
+        self.assertEqual(rc, 0)
+        buf = Path(tmp) / "buf.jsonl"
+        self.assertTrue(buf.exists(), "中心 503 → 在途批次必须落盘")
+        self.assertIn("ban", buf.read_text())
+
+    def test_repeated_sigterm_does_not_abort_drain(self):
+        """R4-01：排空期间的重复 SIGTERM 必须被忽略（stopping 幂等）——
+        KeyboardInterrupt 是 BaseException，会穿透 except Exception 打断排空。"""
+        import http.server
+        received = []
+
+        class SlowSink(http.server.BaseHTTPRequestHandler):
+            def do_POST(self):
+                n = int(self.headers.get("Content-Length", 0))
+                import json as _json
+                body = _json.loads(self.rfile.read(n) or b"{}")
+                received.extend(body.get("events", []))
+                time.sleep(0.8)  # 慢中心：制造排空窗口期
+                self.send_response(200)
+                self.end_headers()
+
+            def log_message(self, format, *args):
+                pass
+
+        srv = http.server.HTTPServer(("127.0.0.1", 0), SlowSink)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        tmp = tempfile.mkdtemp()
+        proc, f2b_log = self._run_child(f"http://127.0.0.1:{srv.server_port}/ingest", tmp)
+        try:
+            with open(f2b_log, "a") as f:
+                f.write("2026-09-07 12:00:00,123 fail2ban.actions [1]: "
+                        "NOTICE [sshd] Ban 9.9.9.9\n")
+            time.sleep(1.5)
+            proc.send_signal(signal.SIGTERM)  # 第一次：进入排空（慢中心，发送中）
+            time.sleep(0.2)
+            proc.send_signal(signal.SIGTERM)  # 第二次：stopping=True，必须被忽略
+            try:
+                rc = proc.wait(timeout=20)
+            except Exception:
+                proc.kill()
+                raise AssertionError("子进程未在 20s 内退出（排空可能被打断）")
+        finally:
+            srv.shutdown()
+            if proc.poll() is None:
+                proc.kill()
+        self.assertEqual(rc, 0)
+        types = [e.get("event_type") for e in received]
+        self.assertIn("ban", types)
+
+
+class TestInflightShutdown(unittest.TestCase):
+    """R4-01 场景 A（线程内精确时序）：flush 线程已取走批次时停止，
+    批次必须有归属——等待它完成，或超时接管落盘。"""
+
+    def _ban_ev(self):
+        return {"ts": "2026-09-07T12:00:10+00:00", "event_type": "ban",
+                "src_ip": "9.9.9.9", "raw_excerpt": "ban-x"}
+
+    def test_inflight_send_settles_before_exit(self):
+        """在途发送完成后 flush_all 才返回；批次送达而非落盘。"""
+        post_called = threading.Event()
+        release = threading.Event()
+        sent = []
+
+        class Blocking(sc.Pusher):
+            def _post(self, batch):
+                post_called.set()
+                release.wait(10)
+                sent.extend(batch)
+
+        buf = Path(tempfile.mkdtemp()) / "buf.jsonl"
+        p = Blocking("http://x", "tok", "M", buf, 30, shutdown_wait=5)
+        p.add(self._ban_ev())
+        t = threading.Thread(target=p.flush, daemon=True)
+        t.start()
+        self.assertTrue(post_called.wait(2), "flush 线程应取走批次进入在途发送")
+
+        drained = threading.Event()
+        def shutdown():
+            p.flush_all()
+            drained.set()
+        st = threading.Thread(target=shutdown, daemon=True)
+        st.start()
+        time.sleep(0.5)
+        self.assertFalse(drained.is_set(), "在途批次未确认前 flush_all 不应返回")
+        release.set()  # 中心响应 200
+        st.join(5)
+        t.join(5)
+        self.assertTrue(drained.is_set())
+        self.assertEqual(len(sent), 1)  # 批次送达中心
+        self.assertFalse(buf.exists())  # 无落盘
+
+    def test_inflight_timeout_taken_over_to_disk(self):
+        """在途发送超出 shutdown_wait → 主线程接管落盘；发送线程随后的失败
+        落盘产生同 ID 双份（幂等，中心计数不变）。"""
+        import json as _json
+        post_called = threading.Event()
+        release = threading.Event()
+
+        class Hanging(sc.Pusher):
+            def _post(self, batch):
+                post_called.set()
+                release.wait(10)
+                raise OSError("centre 503")
+
+        buf = Path(tempfile.mkdtemp()) / "buf.jsonl"
+        p = Hanging("http://x", "tok", "M", buf, 30, shutdown_wait=0.5)
+        p.add(self._ban_ev())
+        t = threading.Thread(target=p.flush, daemon=True)
+        t.start()
+        self.assertTrue(post_called.wait(2))
+        p.flush_all()  # 0.5s 超时 → 接管落盘
+        self.assertTrue(buf.exists(), "超时后批次必须落盘")
+        release.set()  # flush 线程失败 → 再落一份（同 ID 幂等）
+        t.join(5)
+        lines = buf.read_text().strip().splitlines()
+        self.assertEqual(len(lines), 2)  # 接管 1 + 发送线程失败 1
+        self.assertEqual(_json.loads(lines[0])["event_id"],
+                         _json.loads(lines[1])["event_id"])  # 同 ID 幂等
+
+
+class TestReplayOwnership(unittest.TestCase):
+    """R4-01 场景 B：缓冲重放原子 rename 切换归属——并发追加写新文件，
+    重放只删自己 rename 走的那份；失败留下 replay 文件等下轮/重启捡起。"""
+
+    def _ev(self, tag):
+        return {"event_id": f"M:scan:1.2.3.4:{tag}", "event_type": "scan",
+                "src_ip": "1.2.3.4", "count": 1, "ts": "2026-09-07T12:00:00+00:00"}
+
+    def test_replay_never_deletes_concurrent_appends(self):
+        """报告的精确时序：重放读到 old 后暂停 → 并发追加 new → 重放成功
+        只删 replay 文件 → new 必须仍在主缓冲。"""
+        import json as _json
+        d = Path(tempfile.mkdtemp())
+        buf = d / "buf.jsonl"
+        old, new = self._ev("old"), self._ev("new")
+        buf.write_text(_json.dumps(old) + "\n")
+
+        post_called = threading.Event()
+        release = threading.Event()
+        sent = []
+
+        class Blocking(sc.Pusher):
+            def _post(self, batch):
+                sent.extend(batch)
+                post_called.set()
+                release.wait(10)
+
+        p = Blocking("http://x", "tok", "M", buf, 30)
+        t = threading.Thread(target=p.retry_buffer, daemon=True)
+        t.start()
+        self.assertTrue(post_called.wait(2), "重放应已 rename 并读到 old")
+        p._buffer([new])  # 并发追加（模拟 flush_all 失败落盘）
+        release.set()
+        t.join(5)
+        # new 仍在主缓冲，没被误删
+        remaining = buf.read_text().strip().splitlines()
+        self.assertEqual(len(remaining), 1)
+        self.assertEqual(_json.loads(remaining[0])["event_id"], new["event_id"])
+        # old 已发送，replay 文件已删
+        self.assertEqual([e["event_id"] for e in sent], [old["event_id"]])
+        self.assertFalse(p._replay_path().exists())
+
+    def test_failed_replay_keeps_file_and_next_round_picks_up(self):
+        """重放失败留下 replay 文件（不归还、不删除）；下轮重放直接捡起它，
+        崩溃重启后也不会孤儿化。"""
+        import json as _json
+        d = Path(tempfile.mkdtemp())
+        buf = d / "buf.jsonl"
+        old = self._ev("old")
+        buf.write_text(_json.dumps(old) + "\n")
+        sent = []
+
+        class FailOnce(sc.Pusher):
+            def _post(self, batch):
+                if not getattr(self, "_failed", False):
+                    self._failed = True
+                    raise OSError("centre down")
+                sent.extend(batch)
+
+        p = FailOnce("http://x", "tok", "M", buf, 30)
+        p.retry_buffer()  # 失败
+        self.assertTrue(p._replay_path().exists())  # replay 文件留着
+        self.assertFalse(buf.exists())  # 主缓冲已被 rename 走
+        p.retry_buffer()  # 第二轮：捡起 replay → 成功 → 删除
+        self.assertEqual([e["event_id"] for e in sent], [old["event_id"]])
+        self.assertFalse(p._replay_path().exists())
+
+
+class TestStoppingIntake(unittest.TestCase):
+    """R4-01：stopping 后 add 直接落盘（flush_all 已排空队列，进程将退出），
+    窗口单条带唯一 :x<seq> 后缀，防中心 MAX 合并丢计数。"""
+
+    def test_add_after_stopping_goes_to_disk(self):
+        import json as _json
+        buf = Path(tempfile.mkdtemp()) / "buf.jsonl"
+        sent = []
+
+        class Sink(sc.Pusher):
+            def _post(self, batch):
+                sent.extend(batch)
+
+        p = Sink("http://x", "tok", "M", buf, 30)
+        p.flush_all()  # 队列空，仅翻转 stopping
+        p.add({"ts": "t", "event_type": "scan", "src_ip": "1.2.3.4", "raw_excerpt": "a"})
+        p.add({"ts": "t", "event_type": "scan", "src_ip": "1.2.3.4", "raw_excerpt": "b"})
+        p.add({"ts": "t", "event_type": "ban", "src_ip": "9.9.9.9", "raw_excerpt": "c"})
+        self.assertEqual(len(sent), 0)  # stopping 后不再进内存队列
+        lines = buf.read_text().strip().splitlines()
+        self.assertEqual(len(lines), 3)
+        ids = [_json.loads(l)["event_id"] for l in lines]
+        self.assertEqual(len(set(ids)), 3)  # 三条 ID 互不相同
+        scan_ids = [i for i in ids if ":scan:" in i]
+        self.assertTrue(all(":x" in i for i in scan_ids))  # 唯一后缀
 
 
 if __name__ == "__main__":

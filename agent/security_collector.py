@@ -180,24 +180,52 @@ class Pusher:
     by (type, ip, window_start); discrete events (ban/unban) queue as-is. A
     background thread flushes every flush_interval seconds; on send failure the
     batch is appended to a local jsonl disk buffer which the same thread retries.
-    No GeoIP and no local DB here — the centre enriches and stores. The only
-    agent state is the in-memory window (lost on restart, <60s, acceptable) and
-    the disk buffer (survives centre downtime).
+    No GeoIP and no local DB here — the centre enriches and stores.
+
+    Ownership rules — every event has exactly one owner at any moment, and every
+    hand-off happens inside a lock:
+    * `_windows` / `_discrete` (guarded by `_lock`): pending in memory.
+    * `_inflight` (guarded by `_lock`): popped by the flush thread, network send
+      in progress. Registered BEFORE the send starts, so a shutdown can wait
+      for it or take it over — the batch never lives only on a thread's stack.
+    * Buffer file (guarded by `_buffer_lock`, held only for file I/O, never over
+      the network): persisted, replayed later. Replay atomically renames the
+      file aside first, so a concurrent append never lands in a file a replay
+      is about to delete.
+
+    Shutdown (`flush_all`): stop memory intake, drain queues, wait (bounded) for
+    the in-flight send, take it over to disk on timeout. A duplicated take-over
+    is safe — window/discrete ids are stable across retries and the centre
+    upserts idempotently.
     """
 
     CHUNK = 500  # centre's _MAX_BATCH — never exceed it in one POST
     MAX_BUFFER_BYTES = 100 * 1024 * 1024  # 断网缓存上限，防中心长期宕机时磁盘被撑满
 
     def __init__(self, center_url: str, token: str, machine_id: str,
-                 buffer_path: Path, flush_interval: int = 30):
+                 buffer_path: Path, flush_interval: int = 30,
+                 shutdown_wait: float = 20.0):
         self.center_url = center_url
         self.token = token
         self.machine_id = machine_id
         self.buffer_path = buffer_path
         self.flush_interval = flush_interval
+        # Bounded wait for an in-flight send during shutdown. Covers the urlopen
+        # timeout (15s) under normal slowness; on timeout the batch is taken
+        # over to disk instead of dying with the daemon thread.
+        self.shutdown_wait = shutdown_wait
         self._windows: dict = {}    # (type, ip, window_start) -> event dict
         self._discrete: list = []   # ban/unban
+        self._inflight: "Optional[list]" = None  # batch popped by flush thread, send in progress
+        self._stopping = False
+        self._stop_seq = 0          # unique id suffix for window singles buffered after stopping
         self._lock = threading.Lock()
+        self._buffer_lock = threading.Lock()
+
+    @property
+    def stopping(self) -> bool:
+        with self._lock:
+            return self._stopping
 
     @staticmethod
     def _discrete_id(machine_id: str, ev: dict) -> str:
@@ -207,25 +235,42 @@ class Pusher:
         return f"{machine_id}:{ev['event_type']}:{ev['src_ip']}:{int(time.time())}:{h}"
 
     def add(self, ev: dict):
-        """Route one parsed event: discrete → queue, continuous → window merge."""
+        """Route one parsed event: discrete → queue, continuous → window merge.
+
+        After stopping begins, events skip the in-memory queues and go straight
+        to the disk buffer: flush_all has already drained the queues and the
+        process is about to exit, so nobody would flush them otherwise.
+        Buffered window singles get a unique `:x<seq>` id suffix — the plain
+        window id would merge them into one centre row via MAX(old,new) and
+        lose counts.
+        """
         etype = ev["event_type"]
+        ev = dict(ev)
         if etype in ("ban", "unban"):
-            ev = dict(ev)
             ev["event_id"] = self._discrete_id(self.machine_id, ev)
             ev["count"] = 1
             with self._lock:
-                self._discrete.append(ev)
-        else:
-            wstart = int(time.time() // 60 * 60)
-            key = (etype, ev["src_ip"], wstart)
-            with self._lock:
+                if not self._stopping:
+                    self._discrete.append(ev)
+                    return
+            self._buffer([ev])  # stopping：直接落盘（discrete id 本就唯一）
+            return
+        wstart = int(time.time() // 60 * 60)
+        key = (etype, ev["src_ip"], wstart)
+        with self._lock:
+            if not self._stopping:
                 if key in self._windows:
                     self._windows[key]["count"] += 1
                 else:
-                    ev = dict(ev)
                     ev["event_id"] = f"{self.machine_id}:{etype}:{ev['src_ip']}:{wstart}"
                     ev["count"] = 1
                     self._windows[key] = ev
+                return
+            # stopping：直接落盘，唯一 id 后缀防中心 MAX 合并丢计数
+            self._stop_seq += 1
+            ev["event_id"] = f"{self.machine_id}:{etype}:{ev['src_ip']}:{wstart}:x{self._stop_seq}"
+            ev["count"] = 1
+        self._buffer([ev])
 
     def flush(self):
         """Send *sealed* windows + the discrete queue.
@@ -237,19 +282,44 @@ class Pusher:
         `MAX(old, new)` drops M. To emit each minute's full count exactly once we
         only send windows whose minute is already over (sealed), and keep the
         current minute accumulating in place.
+
+        The popped batch is registered as `_inflight` inside the same lock, so a
+        concurrent shutdown sees it (waits, or takes it over to disk) instead of
+        finding empty queues and exiting while the batch lives only on this
+        thread's stack.
         """
         now_minute = int(time.time() // 60)
         with self._lock:
+            if self._inflight is not None:
+                # Previous send still in progress — leave everything queued for
+                # the next round. (run_flush is single-threaded; defensive only.)
+                return
             sealed_keys = [k for k in self._windows if k[2] // 60 < now_minute]
             sealed = [self._windows.pop(k) for k in sealed_keys]
             batch = sealed + self._discrete
             self._discrete = []
+            if batch:
+                self._inflight = batch
         if batch:
-            self._send(batch)
+            try:
+                self._send(batch)
+            finally:
+                with self._lock:
+                    self._inflight = None
 
     def flush_all(self):
-        """Shutdown drain: send every pending window, including the unsealed
-        current minute.
+        """Shutdown drain: stop intake, send every pending window (including the
+        unsealed current minute), then settle the in-flight batch.
+
+        Order matters:
+        1. `_stopping` flips first — add() now writes straight to disk instead
+           of re-filling the queues being drained.
+        2. The drain send runs outside the lock; its failure path is `_buffer`,
+           so nothing is lost on centre downtime.
+        3. The flush thread may hold an in-flight batch (popped, send in
+           progress). Wait a bounded time for its own success/failure-to-disk
+           path to settle it; on timeout take it over to disk here. A duplicated
+           take-over is safe: ids are stable and the centre upserts idempotently.
 
         ID rules — wrong ids here lose counts to the centre's MAX(old,new)
         upsert:
@@ -268,6 +338,7 @@ class Pusher:
         now_epoch = int(time.time())
         now_minute_start = now_epoch // 60 * 60
         with self._lock:
+            self._stopping = True
             win_items = list(self._windows.items())
             self._windows.clear()
             discrete, self._discrete = self._discrete, []
@@ -280,6 +351,19 @@ class Pusher:
         batch.extend(discrete)
         if batch:
             self._send(batch)
+        # Settle the flush thread's in-flight batch: bounded wait, then take over.
+        deadline = time.monotonic() + self.shutdown_wait
+        while True:
+            with self._lock:
+                pending = self._inflight
+            if pending is None:
+                return
+            if time.monotonic() >= deadline:
+                print(f"[push] shutdown: taking over {len(pending)} in-flight events",
+                      file=sys.stderr)
+                self._buffer(pending)
+                return
+            time.sleep(0.1)
 
     def _send(self, batch: list):
         try:
@@ -297,32 +381,64 @@ class Pusher:
                      "Authorization": f"Bearer {self.token}"},
             method="POST")
         with urllib.request.urlopen(req, timeout=15) as resp:
-            resp.read()
+            body = resp.read()
+        # Transport success != all events accepted. Rejections must be visible,
+        # not silently absorbed.
+        try:
+            result = json.loads(body)
+        except (ValueError, TypeError):
+            return
+        rejected = result.get("rejected")
+        if rejected:
+            print(f"[push] centre rejected {rejected}/{len(batch)} events", file=sys.stderr)
 
     def _buffer(self, batch: list):
+        """Append events to the disk buffer. Serialized with replay's
+        rename/unlink via `_buffer_lock` (file I/O only, never over the
+        network), so an append can never land inside a file a replay is about
+        to delete."""
         try:
-            # Hard cap on the disk buffer: if the centre is down for a very long
-            # time, unbounded append would fill the disk. Drop new events (keep
-            # the already-buffered ones) once the cap is hit.
-            size = self.buffer_path.stat().st_size if self.buffer_path.exists() else 0
-            if size >= self.MAX_BUFFER_BYTES:
-                print(f"[push] buffer full ({size} bytes), dropping {len(batch)} events", file=sys.stderr)
-                return
-            with open(self.buffer_path, "a") as f:
-                for e in batch:
-                    f.write(json.dumps(e) + "\n")
+            with self._buffer_lock:
+                # Hard cap on the disk buffer: if the centre is down for a very
+                # long time, unbounded append would fill the disk. Drop new
+                # events (keep the buffered ones) once the cap is hit.
+                size = self.buffer_path.stat().st_size if self.buffer_path.exists() else 0
+                if size >= self.MAX_BUFFER_BYTES:
+                    print(f"[push] buffer full ({size} bytes), dropping {len(batch)} events",
+                          file=sys.stderr)
+                    return
+                with open(self.buffer_path, "a") as f:
+                    for e in batch:
+                        f.write(json.dumps(e) + "\n")
         except OSError as e:
             print(f"[push] buffer write failed: {e}", file=sys.stderr)
 
+    def _replay_path(self) -> Path:
+        return self.buffer_path.with_name(self.buffer_path.name + ".replay")
+
     def retry_buffer(self):
-        """Re-send buffered events; clear the buffer only when all chunks succeed."""
-        if not self.buffer_path.exists():
-            return
+        """Re-send buffered events; delete the replay file only after it fully
+        sends.
+
+        Ownership: the buffer file is atomically renamed aside (`.replay`)
+        before anything is read or sent. Concurrent appends (e.g. a shutdown
+        flush failing to disk) write to a fresh buffer file, which this replay
+        never deletes. A failed replay leaves the `.replay` file in place — the
+        next call (this process or after a restart) picks it up before renaming
+        anew, so a crash mid-replay cannot orphan events.
+        """
+        replay_path = self._replay_path()
+        with self._buffer_lock:
+            if not replay_path.exists():
+                if not self.buffer_path.exists():
+                    return
+                try:
+                    os.replace(self.buffer_path, replay_path)
+                except OSError:
+                    return
         try:
-            lines = [l for l in self.buffer_path.read_text().splitlines() if l.strip()]
+            lines = [l for l in replay_path.read_text().splitlines() if l.strip()]
         except OSError:
-            return
-        if not lines:
             return
         batch = []
         for l in lines:
@@ -331,15 +447,20 @@ class Pusher:
             except json.JSONDecodeError:
                 pass
         if not batch:
-            self.buffer_path.unlink(missing_ok=True)
+            with self._buffer_lock:
+                replay_path.unlink(missing_ok=True)
             return
         try:
             for i in range(0, len(batch), self.CHUNK):
                 self._post(batch[i:i + self.CHUNK])
-            self.buffer_path.unlink(missing_ok=True)
-            print(f"[push] flushed {len(batch)} buffered events", file=sys.stderr)
         except Exception as e:
+            # Leave the replay file for the next retry — it remains the source
+            # of truth for these events.
             print(f"[push] buffer retry failed ({len(batch)} pending): {e}", file=sys.stderr)
+            return
+        with self._buffer_lock:
+            replay_path.unlink(missing_ok=True)
+        print(f"[push] flushed {len(batch)} buffered events", file=sys.stderr)
 
 
 # ------------------------------------------------------------------ parsers
@@ -853,10 +974,16 @@ class Collector:
             pusher = self.pusher
 
             def run_flush():
-                while True:
+                while not pusher.stopping:
                     time.sleep(pusher.flush_interval)
+                    # Stopping: leave ALL draining to flush_all — no extra flush,
+                    # no replay. One owner for shutdown-time data placement.
+                    if pusher.stopping:
+                        break
                     try:
                         pusher.flush()
+                        if pusher.stopping:
+                            break
                         pusher.retry_buffer()
                     except Exception as e:
                         print(f"[push] flush error: {e}", file=sys.stderr)
@@ -921,7 +1048,11 @@ if __name__ == "__main__":
             print("error: --push requires --center-url and --token/--token-file", file=sys.stderr)
             sys.exit(2)
         buffer_path = BUFFER_FILE
-        pusher = Pusher(args.center_url, token, MACHINE_ID, buffer_path, args.flush_interval)
+        # Bounded in-flight wait on shutdown; env-overridable for tests (a real
+        # 20s wait would make the shutdown-takeover test glacial).
+        shutdown_wait = float(os.environ.get("SEC_SHUTDOWN_WAIT", "20"))
+        pusher = Pusher(args.center_url, token, MACHINE_ID, buffer_path,
+                        args.flush_interval, shutdown_wait=shutdown_wait)
 
     collector = Collector(DB_PATH, pusher=pusher)
 
@@ -933,6 +1064,12 @@ if __name__ == "__main__":
     # Thread.join() inside run(); join is interruptible, so the raise lands
     # there and unwinds normally.
     def _raise_keyboard_interrupt(signum, frame):
+        # A repeated signal during the drain must not interrupt it:
+        # KeyboardInterrupt derives from BaseException and would punch through
+        # the `except Exception` around flush_all, aborting the drain halfway.
+        # systemd's TimeoutStopSec (SIGKILL) remains the final backstop.
+        if pusher is not None and pusher.stopping:
+            return
         raise KeyboardInterrupt(f"signal {signum}")
 
     signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)

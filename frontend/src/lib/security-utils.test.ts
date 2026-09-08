@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { localToUTC, splitKeyValue, apiJson, createSeqGuard } from "./security-utils"
+import { localToUTC, splitKeyValue, apiJson, createSeqGuard, parseRotateResult } from "./security-utils"
 
 describe("localToUTC", () => {
 	it("datetime-local 值转成带时区偏移的 ISO", () => {
@@ -67,5 +67,23 @@ describe("createSeqGuard", () => {
 		const s2 = g.next()
 		expect(g.isCurrent(s1)).toBe(false)
 		expect(g.isCurrent(s2)).toBe(true)
+	})
+})
+
+describe("parseRotateResult（R4-02：rotate 失败不能伪装成成功）", () => {
+	it("HTTP 200 + deleted 数字 → 返回删除数", () => {
+		expect(parseRotateResult(true, { deleted: 42 })).toBe(42)
+		expect(parseRotateResult(true, { deleted: 0 })).toBe(0) // 0 也是合法结果
+	})
+
+	it("HTTP 500 + 错误 JSON → null（不是 undefined 拼接成功文案）", () => {
+		expect(parseRotateResult(false, { error: "boom" })).toBe(null)
+	})
+
+	it("HTTP 200 但 deleted 缺失/非数字 → null（响应无效）", () => {
+		expect(parseRotateResult(true, {})).toBe(null)
+		expect(parseRotateResult(true, { deleted: "12" })).toBe(null)
+		expect(parseRotateResult(true, null)).toBe(null)
+		expect(parseRotateResult(true, undefined)).toBe(null)
 	})
 })

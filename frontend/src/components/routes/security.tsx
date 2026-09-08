@@ -9,7 +9,7 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { geoEqualEarth, geoPath } from "d3-geo"
 import { feature } from "topojson-client"
-import { apiJson, createSeqGuard, localToUTC, splitKeyValue } from "@/lib/security-utils"
+import { apiJson, createSeqGuard, localToUTC, parseRotateResult, splitKeyValue } from "@/lib/security-utils"
 
 // ---------------------------------------------------------------- types
 interface SecurityEvent {
@@ -507,7 +507,10 @@ function AttackMap({
 	// Load world topology once
 	useEffect(() => {
 		fetch("/dashboard-plugins/beszel/dist/countries-50m.json")
-			.then((r) => r.json())
+			.then((r) => {
+				if (!r.ok) throw new Error(`HTTP ${r.status}`)
+				return r.json()
+			})
 			.then((data) => setWorldData(data))
 			.catch(() => setWorldData(null))
 	}, [])
@@ -1377,12 +1380,19 @@ function RotationSettings({ onRotate }: { onRotate: (days: number) => void }) {
 		setRotating(true)
 		try {
 			const r = await fetch(`/api/plugins/beszel/security/rotate?keep_days=${keepDays}`, { method: "POST" })
-			const d = await r.json()
-			setLastResult(`Deleted ${d.deleted} events older than ${keepDays} days`)
+			const d = await r.json().catch(() => null)
+			// HTTP 失败或响应缺少 deleted 字段都不能显示成功——
+			// "Deleted undefined events" 把故障伪装成了正常结果（R4-02）
+			const deleted = parseRotateResult(r.ok, d)
+			if (deleted === null) {
+				setLastResult("Rotation failed: server returned an error or an invalid response")
+				return
+			}
+			setLastResult(`Deleted ${deleted} events older than ${keepDays} days`)
 			localStorage.setItem("beszel-security-rotation", String(keepDays))
 			onRotate(keepDays)
 		} catch {
-			setLastResult("Rotation failed")
+			setLastResult("Rotation failed: network error")
 		} finally {
 			setRotating(false)
 		}
@@ -1483,6 +1493,8 @@ export default function SecurityPage() {
 	// 地图 bans 模式的全量 active bans——独立于列表的 ip/jail 筛选与分页，翻列表页不影响地图
 	const [mapBans, setMapBans] = useState<Ban[]>([])
 	const [mapBansTotal, setMapBansTotal] = useState(0) // 服务端 total，> mapBans.length 即被 5000 上限截断
+	// 导出失败提示（R4-02）：HTTP 失败不能静默下载错误内容
+	const [exportError, setExportError] = useState<string | null>(null)
 	// 地图模式（attackers/bans）放在这里而非 AttackMap 内部：控件区要根据 mode
 	// 禁用无效的 Period/Show，并给 bans 模式显示截断标注（R3-06）
 	const [mapMode, setMapMode] = useState<"attackers" | "bans">("attackers")
@@ -1723,8 +1735,21 @@ export default function SecurityPage() {
 	}
 
 	const handleExport = async (format: "json" | "csv") => {
+		setExportError(null)
 		const qs = buildQueryString(filter)
-		const res = await fetch(`/api/plugins/beszel/security/export?${qs}&format=${format}`)
+		let res: Response
+		try {
+			res = await fetch(`/api/plugins/beszel/security/export?${qs}&format=${format}`)
+		} catch {
+			setExportError("Export failed: network error")
+			return
+		}
+		// HTTP 失败必须先拦住——否则错误 JSON 会被下载成 security-events.csv，
+		// 留下看似正常命名的假证据文件（R4-02）
+		if (!res.ok) {
+			setExportError(`Export failed: HTTP ${res.status}`)
+			return
+		}
 		const total = res.headers.get("X-Total-Count")
 		const truncated = res.headers.get("X-Truncated") === "true"
 		if (truncated && total && !window.confirm(`Export truncated: only the first 10,000 of ${total} matching events will be exported. Continue?`)) {
@@ -2093,6 +2118,9 @@ export default function SecurityPage() {
 							</Button>
 						</div>
 					</div>
+					{exportError && (
+						<p className="text-xs text-destructive">{exportError}</p>
+					)}
 					{/* Filter bar inside Attackers card header */}
 					<div className="flex flex-wrap items-center gap-3 border-t pt-3">
 						<div className="flex items-center gap-2">
@@ -2255,11 +2283,14 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 	const [loading, setLoading] = useState(true)
 	const [hasMore, setHasMore] = useState(false)
 	const [cursor, setCursor] = useState<{ts: string; id: number} | null>(null)
+	// 分页加载失败提示（R4-02）：失败不动游标/hasMore，显示错误+重试
+	const [loadError, setLoadError] = useState<string | null>(null)
 	// Expanded event IDs (individual control)
 	const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set())
 
 	const fetchTimeline = (before?: {ts: string; id: number}) => {
 		setLoading(true)
+		setLoadError(null)
 		// URLSearchParams handles the +00:00 timezone offset encoding; the cursor
 		// pairs (ts, id) so events sharing a timestamp aren't skipped on the next page.
 		const params = new URLSearchParams({ ip, limit: '50' })
@@ -2268,8 +2299,7 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 			params.set('before_id', String(before.id))
 		}
 		const url = `/api/plugins/beszel/security/events?${params.toString()}`
-		fetch(url)
-			.then((r) => r.json())
+		apiJson(url)
 			.then((d) => {
 				if (before) {
 					setEvents((prev) => [...prev, ...(d.items || [])])
@@ -2282,13 +2312,19 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 					setCursor({ ts: last.ts, id: last.id })
 				}
 			})
+			.catch((e) => {
+				// R4-02：失败必须可见，且不动游标/hasMore——
+				// 否则 500 会把 hasMore 吞成 false，用户把未加载完的证据当完整时间线
+				setLoadError(`Failed to load events: ${e?.message || "network error"}`)
+			})
 			.finally(() => setLoading(false))
 	}
 
 	useEffect(() => {
 		fetchTimeline()
-		fetch(`/api/plugins/beszel/security/ip/${ip}`)
-			.then((r) => r.json())
+		// geo 富化是辅助信息：失败只意味着没有 geo 块，但 HTTP 错误必须走 catch
+		// （apiJson 检查 r.ok），不能把错误 JSON 里的 d.geo undefined 当正常响应用
+		apiJson(`/api/plugins/beszel/security/ip/${ip}`)
 			.then((d) => setGeo(d.geo))
 			.catch(() => {})
 	}, [ip])
@@ -2424,7 +2460,16 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 									)}
 								</div>
 							))}
-							{hasMore && (
+							{loadError && (
+							<div className="flex items-center justify-between gap-2 mt-2 text-xs text-destructive">
+								<span>{loadError}（已加载的内容不受影响，可重试）</span>
+								<Button variant="outline" size="sm" className="h-6 px-2 text-xs shrink-0"
+									onClick={() => fetchTimeline(cursor ?? undefined)} disabled={loading}>
+									重试
+								</Button>
+							</div>
+						)}
+						{hasMore && !loadError && (
 								<Button
 									variant="outline"
 									className="w-full mt-2"

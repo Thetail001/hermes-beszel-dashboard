@@ -32,6 +32,14 @@ export function createSeqGuard() {
 	}
 }
 
+/** Rotate 响应验证（R4-02）：HTTP 成功且 deleted 是数字才视为成功，
+ * 否则返回 null——不能把 "Deleted undefined events" 这种故障伪装成正常结果。 */
+export function parseRotateResult(ok: boolean, body: unknown): number | null {
+	if (!ok || !body || typeof body !== "object") return null
+	const deleted = (body as { deleted?: unknown }).deleted
+	return typeof deleted === "number" ? deleted : null
+}
+
 // 公共 key:value 分隔：只切第一个冒号，IPv6 值 ip:2606:4700::abcd 不会被截成 ip=2606。
 export function splitKeyValue(part: string): [string, string] | null {
 	const idx = part.indexOf(":")
