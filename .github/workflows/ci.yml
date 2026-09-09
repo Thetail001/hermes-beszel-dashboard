@@ -8,7 +8,7 @@ on:
 
 jobs:
   python-tests:
-    name: Python tests (agent + plugin)
+    name: Python tests (agent + plugin + installer)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,6 +21,8 @@ jobs:
         run: python3 -m unittest tests.test_agent -v
       - name: Run plugin tests
         run: python3 -m unittest tests.test_plugin -v
+      - name: Run installer tests
+        run: python3 -m unittest tests.test_installer -v
 
   frontend:
     name: Frontend (test + typecheck + build)
