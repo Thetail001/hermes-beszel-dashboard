@@ -9,7 +9,7 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { geoEqualEarth, geoPath } from "d3-geo"
 import { feature } from "topojson-client"
-import { apiJson, createSeqGuard, localToUTC, parseRotateResult, splitKeyValue } from "@/lib/security-utils"
+import { apiJson, createSeqGuard, fetchExportFile, localToUTC, parseRotateResult, splitKeyValue, timelineView } from "@/lib/security-utils"
 
 // ---------------------------------------------------------------- types
 interface SecurityEvent {
@@ -1737,31 +1737,22 @@ export default function SecurityPage() {
 	const handleExport = async (format: "json" | "csv") => {
 		setExportError(null)
 		const qs = buildQueryString(filter)
-		let res: Response
+		let file: { blob: Blob; filename: string; total: string; truncated: boolean }
 		try {
-			res = await fetch(`/api/plugins/beszel/security/export?${qs}&format=${format}`)
-		} catch {
-			setExportError("Export failed: network error")
+			file = await fetchExportFile(`/api/plugins/beszel/security/export?${qs}&format=${format}`)
+		} catch (e) {
+			// R5-04：fetch、状态检查、正文读取（响应头成功后连接中断）
+			// 都在同一条错误路径上——任何一步失败都有可见提示、不产生下载
+			setExportError(`Export failed: ${e instanceof Error ? e.message : "network error"}`)
 			return
 		}
-		// HTTP 失败必须先拦住——否则错误 JSON 会被下载成 security-events.csv，
-		// 留下看似正常命名的假证据文件（R4-02）
-		if (!res.ok) {
-			setExportError(`Export failed: HTTP ${res.status}`)
+		if (file.truncated && file.total && !window.confirm(`Export truncated: only the first 10,000 of ${file.total} matching events will be exported. Continue?`)) {
 			return
 		}
-		const total = res.headers.get("X-Total-Count")
-		const truncated = res.headers.get("X-Truncated") === "true"
-		if (truncated && total && !window.confirm(`Export truncated: only the first 10,000 of ${total} matching events will be exported. Continue?`)) {
-			return
-		}
-		const blob = await res.blob()
-		const url = URL.createObjectURL(blob)
+		const url = URL.createObjectURL(file.blob)
 		const a = document.createElement("a")
-		const cd = res.headers.get("Content-Disposition") || ""
-		const m = cd.match(/filename="?([^";]+)"?/)
 		a.href = url
-		a.download = m ? m[1] : `security-events.${format}`
+		a.download = file.filename || `security-events.${format}`
 		document.body.appendChild(a)
 		a.click()
 		a.remove()
@@ -2352,6 +2343,7 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 	// header; individual rows tag their own machine only when >1 is involved.
 	const targets = Array.from(new Set(events.map((e) => e.machine_id).filter(Boolean)))
 
+	const timelineState = timelineView(loading, events.length, loadError)
 	const toggleExpand = (id: number) => {
 		setExpandedIds((prev) => {
 			const next = new Set(prev)
@@ -2416,9 +2408,19 @@ function IpTimeline({ ip, onBack }: { ip: string; onBack: () => void }) {
 					<CardTitle><Trans>Event Timeline</Trans></CardTitle>
 				</CardHeader>
 				<CardContent>
-					{loading && events.length === 0 ? (
+					{timelineState === "loading" ? (
 						<div className="py-8 text-center text-muted-foreground"><Trans>Loading...</Trans></div>
-					) : events.length === 0 ? (
+					) : timelineState === "firstError" ? (
+						// R5-03：首次加载失败 ≠ 没有事件——错误+重试必须独立于
+						// 列表是否有内容渲染，否则用户把故障看成"该 IP 无记录"
+						<div className="py-8 text-center space-y-3">
+							<p className="text-sm text-destructive">{loadError}</p>
+							<Button variant="outline" size="sm"
+								onClick={() => fetchTimeline()}>
+								<Trans>Retry</Trans>
+							</Button>
+						</div>
+					) : timelineState === "empty" ? (
 						<div className="py-8 text-center text-muted-foreground"><Trans>No events for this IP.</Trans></div>
 					) : (
 						<div className="space-y-1">

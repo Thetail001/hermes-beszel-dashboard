@@ -113,9 +113,21 @@ else
   rm -f "$TMP_COLLECTOR"
 fi
 
-# token 复用 beszel 的（universal 或 per-system 均可，中心两种都认）
-printf '%s' "$TOKEN" > "$AGENT_DIR/agent_token.txt"
-chmod 600 "$AGENT_DIR/agent_token.txt"
+# token 复用 beszel 的（universal 或 per-system 均可，中心两种都认）。
+# token 也在变更检测里：采集器只在启动时读 token 文件，撤销旧 token 后
+# 若不重启，运行中的进程会一直拿着旧值推送被拒（R5-05）。临时文件比较，
+# 不 echo token 内容，权限 600。
+TMP_TOKEN="$(mktemp)"
+chmod 600 "$TMP_TOKEN"
+printf '%s' "$TOKEN" > "$TMP_TOKEN"
+if ! cmp -s "$TMP_TOKEN" "$AGENT_DIR/agent_token.txt" 2>/dev/null; then
+  mv "$TMP_TOKEN" "$AGENT_DIR/agent_token.txt"
+  chmod 600 "$AGENT_DIR/agent_token.txt"
+  CHANGED=1
+  info "  agent token 已更新"
+else
+  rm -f "$TMP_TOKEN"
+fi
 
 # systemd unit：同样先写临时文件对比，变了才替换
 TMP_UNIT="$(mktemp)"

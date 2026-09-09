@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { localToUTC, splitKeyValue, apiJson, createSeqGuard, parseRotateResult } from "./security-utils"
+import { localToUTC, splitKeyValue, apiJson, createSeqGuard, fetchExportFile, parseRotateResult, timelineView } from "./security-utils"
 
 describe("localToUTC", () => {
 	it("datetime-local 值转成带时区偏移的 ISO", () => {
@@ -85,5 +85,65 @@ describe("parseRotateResult（R4-02：rotate 失败不能伪装成成功）", ()
 		expect(parseRotateResult(true, { deleted: "12" })).toBe(null)
 		expect(parseRotateResult(true, null)).toBe(null)
 		expect(parseRotateResult(true, undefined)).toBe(null)
+	})
+})
+
+describe("timelineView（R5-03：首次失败不能落到 No events）", () => {
+	it("首次加载失败（空列表+错误）→ firstError 而非 empty", () => {
+		expect(timelineView(false, 0, "Failed to load events: HTTP 500")).toBe("firstError")
+	})
+
+	it("成功返回空列表（无错误）→ empty", () => {
+		expect(timelineView(false, 0, null)).toBe("empty")
+	})
+
+	it("加载中且还没有数据 → loading（错误也不能抢）", () => {
+		expect(timelineView(true, 0, "stale")).toBe("loading")
+	})
+
+	it("有数据 → list（翻页失败的错误 UI 由列表分支内部处理）", () => {
+		expect(timelineView(false, 5, "page 2 failed")).toBe("list")
+		expect(timelineView(true, 5, null)).toBe("list") // 翻页 loading 不遮已有列表
+	})
+})
+
+describe("fetchExportFile（R5-04：完整操作异常边界）", () => {
+	it("响应头成功后正文读取中断 → 抛出且不返回 blob", async () => {
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+			ok: true,
+			headers: new Headers({ "Content-Disposition": 'attachment; filename="x.csv"' }),
+			blob: () => Promise.reject(new Error("body stream reset")),
+		}))
+		await expect(fetchExportFile("/export")).rejects.toThrow("body stream reset")
+		vi.unstubAllGlobals()
+	})
+
+	it("HTTP 失败 → 抛出 HTTP 状态，不读正文", async () => {
+		const blob = vi.fn()
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+			ok: false, status: 500, blob,
+		}))
+		await expect(fetchExportFile("/export")).rejects.toThrow("HTTP 500")
+		expect(blob).not.toHaveBeenCalled()
+		vi.unstubAllGlobals()
+	})
+
+	it("成功 → 返回 blob、文件名、截断信息", async () => {
+		const fakeBlob = { size: 10 }
+		vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+			ok: true,
+			headers: new Headers({
+				"Content-Disposition": 'attachment; filename="security-events.csv"',
+				"X-Total-Count": "12345",
+				"X-Truncated": "true",
+			}),
+			blob: () => Promise.resolve(fakeBlob),
+		}))
+		const r = await fetchExportFile("/export")
+		expect(r.blob).toBe(fakeBlob)
+		expect(r.filename).toBe("security-events.csv")
+		expect(r.total).toBe("12345")
+		expect(r.truncated).toBe(true)
+		vi.unstubAllGlobals()
 	})
 })

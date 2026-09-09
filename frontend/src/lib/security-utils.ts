@@ -40,6 +40,38 @@ export function parseRotateResult(ok: boolean, body: unknown): number | null {
 	return typeof deleted === "number" ? deleted : null
 }
 
+/** IP 时间线的顶层渲染分支（R5-03）。优先级必须固定：
+ * loading → 首次失败（列表空+有错误：错误+重试）→ 成功空列表 → 列表。
+ * 首次失败绝不能落到 "No events"——那是把故障说成"该 IP 没有记录"。 */
+export function timelineView(
+	loading: boolean, eventCount: number, loadError: string | null,
+): "loading" | "firstError" | "empty" | "list" {
+	if (loading && eventCount === 0) return "loading"
+	if (eventCount === 0 && loadError) return "firstError"
+	if (eventCount === 0) return "empty"
+	return "list"
+}
+
+/** 导出请求的完整编排（R5-04）：取响应 → 状态检查 → 读正文 → 决定下载，
+ * 任一步失败都抛出带原因的错误，绝不返回半成品/错误内容。
+ * 返回值含 blob+文件名；调用方只在拿到返回值后才创建下载。 */
+export async function fetchExportFile(url: string): Promise<{
+	blob: Blob; filename: string; total: string; truncated: boolean
+}> {
+	const res = await fetch(url)
+	if (!res.ok) throw new Error(`HTTP ${res.status}`)
+	// 截断确认由调用方处理（需要 UI 交互），这里只负责"成功才有内容"。
+	const blob = await res.blob() // 正文中断会在这里抛出——调用方必须接住
+	const cd = res.headers.get("Content-Disposition") || ""
+	const m = cd.match(/filename="?([^";]+)"?/)
+	return {
+		blob,
+		filename: m ? m[1] : "",
+		total: res.headers.get("X-Total-Count") || "",
+		truncated: res.headers.get("X-Truncated") === "true",
+	}
+}
+
 // 公共 key:value 分隔：只切第一个冒号，IPv6 值 ip:2606:4700::abcd 不会被截成 ip=2606。
 export function splitKeyValue(part: string): [string, string] | null {
 	const idx = part.indexOf(":")
