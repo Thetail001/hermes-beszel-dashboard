@@ -3,7 +3,9 @@
 覆盖审阅报告反复揪出的漏修点：日志轮转/截断/缺失、退出排空、时间格式解析、
 IPv6 解析、flush 窗口语义。用 unittest（标准库，CI 零依赖）。
 """
+import atexit
 import os
+import shutil
 import signal
 import sys
 import time
@@ -14,6 +16,17 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "agent"))
 import security_collector as sc  # noqa: E402
+
+# R5 一次性沙箱目录：所有测试用 mktemp 之后都把根目录记到这里，
+# 进程退出时统一 shutil.rmtree，避免 CI/开发机 tmp 无限增长。
+_CLEANUP_DIRS: list[Path] = []
+atexit.register(lambda: [shutil.rmtree(d, ignore_errors=True) for d in _CLEANUP_DIRS])
+
+
+def _tmpdir() -> Path:
+    d = Path(tempfile.mkdtemp())
+    _CLEANUP_DIRS.append(d)
+    return d
 
 
 class TestParseAuth(unittest.TestCase):
@@ -93,7 +106,7 @@ class TestPusher(unittest.TestCase):
             def _post(self, batch):
                 sent.extend(batch)
 
-        p = Fake("http://x", "tok", "M", Path(tempfile.mkdtemp()) / "buf.jsonl", 30)
+        p = Fake("http://x", "tok", "M", _tmpdir() / "buf.jsonl", 30)
         return p, sent
 
     def test_flush_sealed_only(self):
@@ -122,7 +135,7 @@ class TestFlushAllIds(unittest.TestCase):
             def _post(self, batch):
                 sent.extend(batch)
 
-        p = Fake("http://x", "tok", "M", Path(tempfile.mkdtemp()) / "buf.jsonl", 30)
+        p = Fake("http://x", "tok", "M", _tmpdir() / "buf.jsonl", 30)
         return p, sent
 
     def _current_minute_start(self):
@@ -163,7 +176,7 @@ class TestFlushAllIds(unittest.TestCase):
     def test_buffer_replay_keeps_id(self):
         """发送失败落盘的批次保留已生成 ID，重放幂等。"""
         import json as _json
-        buf = Path(tempfile.mkdtemp()) / "buf.jsonl"
+        buf = _tmpdir() / "buf.jsonl"
 
         class Fail(sc.Pusher):
             def _post(self, batch):
@@ -215,7 +228,7 @@ class TestTailFile(unittest.TestCase):
     """P1-1: 轮转重开从文件头读，不漏新文件已写内容；首次 seek EOF 跳历史。"""
 
     def test_rotation_reads_new_file(self):
-        d = tempfile.mkdtemp()
+        d = _tmpdir()
         log = os.path.join(d, "test.log")
 
         def parse(line):
@@ -305,7 +318,7 @@ class TestSigtermDrain(unittest.TestCase):
 
         srv = http.server.HTTPServer(("127.0.0.1", 0), Sink)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        tmp = tempfile.mkdtemp()
+        tmp = _tmpdir()
         proc, f2b_log = self._run_child(f"http://127.0.0.1:{srv.server_port}/ingest", tmp)
         try:
             with open(f2b_log, "a") as f:
@@ -324,7 +337,7 @@ class TestSigtermDrain(unittest.TestCase):
 
     def test_sigterm_offline_buffers_to_disk(self):
         """SIGTERM + 中心不可达 → 落盘缓冲，不丢数据。"""
-        tmp = tempfile.mkdtemp()
+        tmp = _tmpdir()
         proc, f2b_log = self._run_child("http://127.0.0.1:1/ingest", tmp)  # 端口 1 不可达
         try:
             with open(f2b_log, "a") as f:
@@ -362,7 +375,7 @@ class TestSigtermDrain(unittest.TestCase):
 
         srv = http.server.HTTPServer(("127.0.0.1", 0), Hang)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        tmp = tempfile.mkdtemp()
+        tmp = _tmpdir()
         # flush-interval=1：周期 flush 真取走批次；shutdown_wait 缩短到 3s
         proc, f2b_log = self._run_child(
             f"http://127.0.0.1:{srv.server_port}/ingest", tmp,
@@ -413,7 +426,7 @@ class TestSigtermDrain(unittest.TestCase):
 
         srv = http.server.HTTPServer(("127.0.0.1", 0), SlowSink)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
-        tmp = tempfile.mkdtemp()
+        tmp = _tmpdir()
         proc, f2b_log = self._run_child(f"http://127.0.0.1:{srv.server_port}/ingest", tmp)
         try:
             with open(f2b_log, "a") as f:
@@ -457,7 +470,7 @@ class TestInflightShutdown(unittest.TestCase):
                 release.wait(10)
                 sent.extend(batch)
 
-        buf = Path(tempfile.mkdtemp()) / "buf.jsonl"
+        buf = _tmpdir() / "buf.jsonl"
         p = Blocking("http://x", "tok", "M", buf, 30, shutdown_wait=5)
         p.add(self._ban_ev())
         t = threading.Thread(target=p.flush, daemon=True)
@@ -492,7 +505,7 @@ class TestInflightShutdown(unittest.TestCase):
                 release.wait(10)
                 raise OSError("centre 503")
 
-        buf = Path(tempfile.mkdtemp()) / "buf.jsonl"
+        buf = _tmpdir() / "buf.jsonl"
         p = Hanging("http://x", "tok", "M", buf, 30, shutdown_wait=0.5)
         p.add(self._ban_ev())
         t = threading.Thread(target=p.flush, daemon=True)
@@ -520,7 +533,7 @@ class TestReplayOwnership(unittest.TestCase):
         """报告的精确时序：重放读到 old 后暂停 → 并发追加 new → 重放成功
         只删 replay 文件 → new 必须仍在主缓冲。"""
         import json as _json
-        d = Path(tempfile.mkdtemp())
+        d = _tmpdir()
         buf = d / "buf.jsonl"
         old, new = self._ev("old"), self._ev("new")
         buf.write_text(_json.dumps(old) + "\n")
@@ -554,7 +567,7 @@ class TestReplayOwnership(unittest.TestCase):
         """重放失败留下 replay 文件（不归还、不删除）；下轮重放直接捡起它，
         崩溃重启后也不会孤儿化。"""
         import json as _json
-        d = Path(tempfile.mkdtemp())
+        d = _tmpdir()
         buf = d / "buf.jsonl"
         old = self._ev("old")
         buf.write_text(_json.dumps(old) + "\n")
@@ -582,7 +595,7 @@ class TestStoppingIntake(unittest.TestCase):
 
     def test_add_after_stopping_goes_to_disk(self):
         import json as _json
-        buf = Path(tempfile.mkdtemp()) / "buf.jsonl"
+        buf = _tmpdir() / "buf.jsonl"
         sent = []
 
         class Sink(sc.Pusher):
@@ -601,6 +614,40 @@ class TestStoppingIntake(unittest.TestCase):
         self.assertEqual(len(set(ids)), 3)  # 三条 ID 互不相同
         scan_ids = [i for i in ids if ":scan:" in i]
         self.assertTrue(all(":x" in i for i in scan_ids))  # 唯一后缀
+
+
+class TestSignalHandlerNoDeadlock(unittest.TestCase):
+    """R5-01：信号处理器在主线程持锁区间被调用时绝不能碰同一把锁——
+    处理器跑在被打断的线程上，重入非重入 Lock 就是死锁。
+    handler 必须只做无锁属性读写（回归成取锁版本时本测试挂起、CI 超时红）。"""
+
+    def _mk(self, **kw):
+        buf = _tmpdir() / "buf.jsonl"
+        return sc.Pusher("http://x", "tok", "M", buf, 30, **kw)
+
+    def test_second_signal_returns_while_lock_held(self):
+        # 精确复现报告时序：_stopping=True 且 _lock 已被主线程持有
+        p = self._mk()
+        p.stop_requested = True  # 模拟第一次信号已触发排空
+        with p._lock:            # 模拟 flush_all 持锁区间
+            # handler 被投递到这（同线程）：只能 return，不得取锁
+            sc.make_shutdown_signal_handler(p)(signal.SIGTERM, None)
+            # 走到这里说明没死锁；锁随 with 正常释放
+        with p._lock:            # 锁仍可用
+            pass
+
+    def test_first_signal_raises_and_flags_without_lock(self):
+        # 第一次信号：无锁读取 + 置位 + raise；持锁状态下同样不得阻塞
+        p = self._mk()
+        with p._lock:
+            with self.assertRaises(KeyboardInterrupt):
+                sc.make_shutdown_signal_handler(p)(signal.SIGTERM, None)
+        self.assertTrue(p.stop_requested)
+
+    def test_local_mode_handler_still_raises(self):
+        # pusher=None（本地模式）也必须 raise，信号语义不退化
+        with self.assertRaises(KeyboardInterrupt):
+            sc.make_shutdown_signal_handler(None)(signal.SIGINT, None)
 
 
 if __name__ == "__main__":

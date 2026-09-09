@@ -24,6 +24,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -217,6 +218,16 @@ class Pusher:
         self._windows: dict = {}    # (type, ip, window_start) -> event dict
         self._discrete: list = []   # ban/unban
         self._inflight: "Optional[list]" = None  # batch popped by flush thread, send in progress
+        # Lock-free stop flag, read by the signal handler. GIL makes a single
+        # attribute read/write atomic — the handler MUST NOT take any lock the
+        # main thread may be holding: a signal delivered while the main thread
+        # sits inside `with self._lock` would re-enter the non-reentrant lock
+        # on the same thread and deadlock (R5-01). `_stopping` below is the
+        # authoritative flag for queue behaviour, set under the lock.
+        self.stop_requested = False
+        # Per-process identity baked into post-stop event ids so two runs in
+        # the same minute cannot collide (R5-02).
+        self._run_token = uuid.uuid4().hex[:8]
         self._stopping = False
         self._stop_seq = 0          # unique id suffix for window singles buffered after stopping
         self._lock = threading.Lock()
@@ -266,9 +277,12 @@ class Pusher:
                     ev["count"] = 1
                     self._windows[key] = ev
                 return
-            # stopping：直接落盘，唯一 id 后缀防中心 MAX 合并丢计数
+            # stopping：直接落盘，唯一 id 后缀防中心 MAX 合并丢计数。
+            # 带 _run_token：同分钟内两次运行各自停止后写同一 IP/类型时，
+            # 纯序号会撞（两次运行都从 x1 开始），中心 MAX 合并丢计数（R5-02）。
             self._stop_seq += 1
-            ev["event_id"] = f"{self.machine_id}:{etype}:{ev['src_ip']}:{wstart}:x{self._stop_seq}"
+            ev["event_id"] = (f"{self.machine_id}:{etype}:{ev['src_ip']}"
+                              f":{wstart}:x{self._run_token}{self._stop_seq}")
             ev["count"] = 1
         self._buffer([ev])
 
@@ -337,6 +351,9 @@ class Pusher:
         """
         now_epoch = int(time.time())
         now_minute_start = now_epoch // 60 * 60
+        # Lock-free flag first so a signal arriving mid-drain is ignored even
+        # when the drain was triggered without a signal (direct flush_all call).
+        self.stop_requested = True
         with self._lock:
             self._stopping = True
             win_items = list(self._windows.items())
@@ -633,6 +650,34 @@ def parse_auth_line(line: str) -> Optional[dict]:
                 "raw_excerpt": line.strip()[:500],
             }
     return None
+
+
+# ------------------------------------------------------------------ shutdown signal
+def make_shutdown_signal_handler(pusher: "Optional[Pusher]"):
+    """SIGTERM/SIGINT → drain path. Lock-free by construction (R5-01).
+
+    A signal handler runs ON TOP OF the interrupted thread — which may be the
+    main thread sitting inside `Pusher._lock` within flush_all(). If the handler
+    touched anything that acquires that lock (e.g. the `stopping` property),
+    the same thread would re-enter a non-reentrant Lock: the interrupted code
+    can't finish to release it, the handler can't return. Deadlock.
+
+    So the handler only reads/writes plain attributes (`stop_requested`):
+    single-attribute access is atomic under the GIL. The first signal raises
+    KeyboardInterrupt (unwinds run() into the finally drain); every later
+    signal is ignored so it cannot punch through the drain's
+    `except Exception`. systemd's TimeoutStopSec (SIGKILL) is the last resort.
+    """
+
+    def handler(signum, frame):
+        if pusher is None:
+            raise KeyboardInterrupt(f"signal {signum}")
+        if pusher.stop_requested:
+            return
+        pusher.stop_requested = True
+        raise KeyboardInterrupt(f"signal {signum}")
+
+    return handler
 
 
 # ------------------------------------------------------------------ collector
@@ -1062,18 +1107,11 @@ if __name__ == "__main__":
     # (and INT) into KeyboardInterrupt so every shutdown path drains
     # identically. Signal handlers run on the main thread, which is blocked in
     # Thread.join() inside run(); join is interruptible, so the raise lands
-    # there and unwinds normally.
-    def _raise_keyboard_interrupt(signum, frame):
-        # A repeated signal during the drain must not interrupt it:
-        # KeyboardInterrupt derives from BaseException and would punch through
-        # the `except Exception` around flush_all, aborting the drain halfway.
-        # systemd's TimeoutStopSec (SIGKILL) remains the final backstop.
-        if pusher is not None and pusher.stopping:
-            return
-        raise KeyboardInterrupt(f"signal {signum}")
-
-    signal.signal(signal.SIGTERM, _raise_keyboard_interrupt)
-    signal.signal(signal.SIGINT, _raise_keyboard_interrupt)
+    # there and unwinds normally. Handler is lock-free — see
+    # make_shutdown_signal_handler for why that matters (R5-01).
+    handler = make_shutdown_signal_handler(pusher)
+    signal.signal(signal.SIGTERM, handler)
+    signal.signal(signal.SIGINT, handler)
 
     try:
         collector.run()

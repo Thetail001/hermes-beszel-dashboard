@@ -7,13 +7,24 @@
 import atexit
 import os
 import shutil
-import sys
 import sqlite3
+import sys
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
+
+# R5 一次性沙箱目录：所有测试用 mktemp 之后都把根目录记到这里，
+# 进程退出时统一 shutil.rmtree，避免 CI/开发机 tmp 无限增长。
+_CLEANUP_DIRS: list[Path] = []
+atexit.register(lambda: [shutil.rmtree(d, ignore_errors=True) for d in _CLEANUP_DIRS])
+
+
+def _tmpdir() -> Path:
+    d = Path(tempfile.mkdtemp())
+    _CLEANUP_DIRS.append(d)
+    return d
 
 # R3-08: 导入 plugin_api 之前隔离运行环境——模块导入时会打开运行库做迁移、
 # 启动后台线程。全部指向临时目录并禁用后台 worker，测试绝不触碰真实运行路径。
@@ -24,7 +35,9 @@ os.environ["BESZEL_SEC_DB"] = str(_TEST_TMP / "security-events.db")
 os.environ["BESZEL_DISABLE_BACKGROUND"] = "1"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "plugin" / "dashboard"))
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "agent"))
 import plugin_api  # noqa: E402
+import security_collector as sc  # noqa: E402
 
 
 def make_conn():
@@ -95,6 +108,35 @@ class TestBanForeignRef(unittest.TestCase):
             "FROM security_bans b JOIN security_events e ON b.last_event_id = e.id"
         ):
             self.assertEqual(r["ban_machine"], r["ref_machine"])
+
+
+class TestLateIntakeAcrossRuns(unittest.TestCase):
+    """R5-02：停止后直写缓冲的 :x 序号带运行实例标识——同分钟两次运行
+    各自迟到落盘后，经真实中心入库函数总计数不丢。"""
+
+    def test_same_minute_two_runs_keep_counts(self):
+        conn = make_conn()
+        ev = {"ts": ago(1), "event_type": "scan", "src_ip": "1.2.3.4",
+              "raw_excerpt": "x", "jail": None, "uri": None, "ua": None,
+              "username": None}
+        ids = []
+        for _run in range(2):  # 同分钟内两次运行
+            d = _tmpdir()
+            p = sc.Pusher("http://x", "tok", "A", d / "buf.jsonl", 30)
+            p.flush_all()  # 进入 stopping
+            p.add(dict(ev))
+            import json as _json
+            line = (d / "buf.jsonl").read_text().strip()
+            ids.append(_json.loads(line)["event_id"])
+        self.assertNotEqual(ids[0], ids[1])  # 两次运行的 ID 不同
+        with no_geo():
+            for eid in ids:
+                self.assertTrue(plugin_api._ingest_one(conn, "A", {
+                    **ev, "event_id": eid, "count": 1}))
+        total = conn.execute(
+            "SELECT SUM(count) FROM security_events WHERE machine_id='A'"
+        ).fetchone()[0]
+        self.assertEqual(total, 2)  # 中心 MAX 合并不吞第二条
 
 
 class TestSchemaMigration(unittest.TestCase):
