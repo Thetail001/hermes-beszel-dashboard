@@ -1638,7 +1638,7 @@ def _validate_event(ev):
     if not (1 <= count <= _MAX_COUNT):
         return None
 
-    return {
+    clean = {
         "event_id": event_id,
         "ts": ts_dt.isoformat(),
         "event_type": event_type,
@@ -1651,6 +1651,17 @@ def _validate_event(ev):
         "count": count,
         "burst": 1 if ev.get("burst") else 0,
     }
+    # R2-01：JSON 转义 "\ud800" 会被解析成含孤立 surrogate 的 str，穿过上面
+    # 所有校验，在 SQLite UTF-8 绑定时才炸 UnicodeEncodeError——整批回滚。
+    # 写库前对每条字符串做严格编码验证，孤立 surrogate 按坏事件拒收
+    # （event_id 拒收而非替换，避免静默改变幂等键语义）。
+    for v in clean.values():
+        if isinstance(v, str):
+            try:
+                v.encode("utf-8", "strict")
+            except UnicodeEncodeError:
+                return None
+    return clean
 
 
 def _ingest_one(conn: sqlite3.Connection, machine_id: str, ev: dict) -> bool:

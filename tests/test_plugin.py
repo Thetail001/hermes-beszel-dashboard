@@ -263,3 +263,40 @@ class TestLazyGeoCommit(unittest.TestCase):
         n2 = conn.execute("SELECT query_count FROM geo_cache WHERE ip='9.9.9.9'").fetchone()
         conn.close()
         self.assertEqual(n2[0], n1[0] + 1)  # 已提交才会递增；未提交永远停在 1
+
+
+class TestSurrogateIsolation(unittest.TestCase):
+    """审阅 R2-01：孤立 surrogate（JSON "\\ud800"）拒单条，同批有效事件不受影响。"""
+
+    FIELDS = ["event_id", "jail", "uri", "ua", "username", "raw_excerpt"]
+
+    def test_each_text_field_rejected_without_raising(self):
+        for field in self.FIELDS:
+            conn = make_conn()
+            events = [
+                make_event("scan", "8.8.8.8", ago(10), f"good-a-{field}"),
+                make_event("scan", "8.8.8.8", ago(10), f"bad-{field}"),
+                make_event("scan", "8.8.8.8", ago(10), f"good-b-{field}"),
+            ]
+            if field == "event_id":
+                events[1]["event_id"] = "\ud800"
+            else:
+                events[1][field] = "\ud800"
+            stored = []
+            with no_geo():
+                for ev in events:  # 任何字段抛异常都会让本用例 error（而非 fail）
+                    if plugin_api._ingest_one(conn, "A", ev):
+                        stored.append(ev["event_id"])
+            self.assertEqual(sorted(stored), sorted([f"good-a-{field}", f"good-b-{field}"]), field)
+
+    def test_utf8_text_accepted(self):
+        # 合法中文/emoji 不得误伤
+        conn = make_conn()
+        ev = make_event("scan", "8.8.8.8", ago(10), "utf8-ok")
+        ev["uri"] = "/搜索?q=🔥"
+        ev["username"] = "管理员"
+        ev["raw_excerpt"] = "Failed password for 管理员 from 8.8.8.8"
+        with no_geo():
+            self.assertTrue(plugin_api._ingest_one(conn, "A", ev))
+        row = conn.execute("SELECT uri, username FROM security_events WHERE event_id='utf8-ok'").fetchone()
+        self.assertEqual(row["username"], "管理员")

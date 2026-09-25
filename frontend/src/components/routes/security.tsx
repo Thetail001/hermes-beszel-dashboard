@@ -309,13 +309,18 @@ function EventsChart({ machineId, machines, refreshInterval }: { machineId: stri
 		[buckets, bucket],
 	)
 
-	// 机器 id → 显示名（图例用）；机器顺序表（取色用，颜色稳定绑定机器标识）。
+	// 机器 id → 显示名（图例用）；取色标识表（审阅 R2-02）：by_machine 的 key
+	// 是系统 NAME，机器表同时给 PB record id 和 name——合并去重即可，
+	// machineColorFor 内部排序保证顺序无关；清单外机器按哈希回退。
 	const machineName = useMemo(() => {
 		const map = new Map<string, string>()
 		for (const m of machines) map.set(m.id, m.name || m.id)
 		return (id: string) => map.get(id) || id
 	}, [machines])
-	const machineIds = useMemo(() => machines.map((m) => m.id), [machines])
+	const colorIds = useMemo(
+		() => Array.from(new Set(machines.flatMap((m) => [m.id, m.name || m.id]))),
+		[machines],
+	)
 
 	// Forward navigation is clamped to the current window (no future buckets).
 	const canGoForward = offset < 0
@@ -435,7 +440,7 @@ function EventsChart({ machineId, machines, refreshInterval }: { machineId: stri
 										dataKey={machineRowKey(m)}
 										name={machineName(m)}
 										stackId="a"
-										fill={machineColorFor(m, machineIds)}
+										fill={machineColorFor(m, colorIds)}
 										isAnimationActive={false}
 									/>
 								))

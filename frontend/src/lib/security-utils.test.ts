@@ -232,17 +232,32 @@ describe("chartTickLabel", () => {
 	})
 })
 
-describe("machineColorFor（审阅 P2-4：颜色绑定机器标识，不随排名漂移）", () => {
-	it("同一台机器颜色与列表顺序无关", () => {
+describe("machineColorFor（审阅 R2-02/P2-4：颜色绑定机器标识，不随排名漂移）", () => {
+	it("首尾元素对列表重排也不漂移", () => {
 		const ids = ["HK-01", "DE-01", "US-01"]
-		expect(machineColorFor("DE-01", ids)).toBe(machineColorFor("DE-01", [...ids].reverse()))
-		expect(machineColorFor("DE-01", ids)).toBe(machineColor(1))
+		for (const m of ids) {
+			expect(machineColorFor(m, ids)).toBe(machineColorFor(m, [...ids].reverse()))
+		}
+		// 内部按字典序分配下标：DE-01 < HK-01 < US-01
+		expect(machineColorFor("DE-01", ids)).toBe(machineColor(0))
 		expect(machineColorFor("US-01", ids)).toBe(machineColor(2))
 	})
 
-	it("列表外机器按 id 哈希回退且稳定", () => {
-		const ids = ["HK-01"]
-		expect(machineColorFor("GHOST", ids)).toBe(machineColorFor("GHOST", ids))
-		expect(machineColorFor("GHOST", ids)).toMatch(/^#/)
+	it("注册机器 ≤ 色盘大小时颜色互不相同", () => {
+		const ids = ["DE-01", "HK-01", "US-01"]
+		const colors = ids.map((m) => machineColorFor(m, ids))
+		expect(new Set(colors).size).toBe(ids.length)
+	})
+
+	it("真实 {id,name} 契约（R2-02）：by_machine 的 NAME 命中合并清单", () => {
+		const machines = [
+			{ id: "C20260826107960", name: "DE-01" },
+			{ id: "C20260826107961", name: "HK-01" },
+		]
+		const colorIds = Array.from(new Set(machines.flatMap((m) => [m.id, m.name]))).sort()
+		expect(machineColorFor("DE-01", colorIds)).toBe(machineColor(colorIds.indexOf("DE-01")))
+		expect(machineColorFor("DE-01", colorIds)).not.toBe(machineColorFor("HK-01", colorIds))
+		// 清单外机器哈希回退稳定
+		expect(machineColorFor("GHOST", colorIds)).toBe(machineColorFor("GHOST", colorIds))
 	})
 })

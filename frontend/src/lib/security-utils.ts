@@ -109,12 +109,13 @@ export function machineColor(index: number): string {
 	return MACHINE_COLORS[((index % MACHINE_COLORS.length) + MACHINE_COLORS.length) % MACHINE_COLORS.length]
 }
 
-/** 机器稳定取色（按标识，不按当页排名）：优先按 allIds（/security/machines
- * 返回顺序，稳定）分配；列表外的机器（已下线但还有历史事件）按 id 哈希回退。
- * 翻页/自动刷新后窗口内排名会变——若按排名取色，同一台机器的颜色会互换，
- * 用户会把攻击量变化归错机器（审阅 P2-4）。 */
+/** 机器稳定取色（按标识，不按当页排名）：allIds 内部排序后按下标分配，
+ * 调用方传任何顺序都得到同一分配；列表外的机器（已下线但还有历史事件）
+ * 按 id 哈希回退。翻页/自动刷新后窗口内排名会变——若按排名取色，同一台
+ * 机器的颜色会互换，用户会把攻击量变化归错机器（审阅 P2-4/R2-02）。 */
 export function machineColorFor(id: string, allIds: string[]): string {
-	let idx = allIds.indexOf(id)
+	const sorted = allIds.length > 1 ? [...allIds].sort() : allIds
+	let idx = sorted.indexOf(id)
 	if (idx < 0) {
 		let h = 0
 		for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0
