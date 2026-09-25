@@ -486,6 +486,101 @@ async def security_bans_current(
         conn.close()
 
 
+@router.get("/security/bans/export")
+async def security_bans_export(
+    machine_id: str = "",
+    ip: str = "",
+    jail: str = "",
+    sort: str = "recent",
+    period: str = "all",
+    start: str = "",
+    end: str = "",
+):
+    """Export the currently-active bans matching the Bans list filters as CSV.
+
+    Same filter params as /security/bans/current (minus pagination) so the
+    download mirrors the UI's current view. Consumed by the Active Bans card's
+    CSV button. Auth: session.
+    """
+    conn = _sec_db()
+    try:
+        conds = ["b.unbanned_at IS NULL"]
+        params: list = []
+        if machine_id:
+            conds.append("b.machine_id = ?")
+            params.append(machine_id)
+        if ip:
+            conds.append("b.ip = ?")
+            params.append(ip)
+        if jail:
+            conds.append("b.jail = ?")
+            params.append(jail)
+
+        # Time filter on banned_at — same julianday rule as bans/current.
+        if period == "custom":
+            if start:
+                conds.append("julianday(b.banned_at) >= julianday(?)")
+                params.append(start)
+            if end:
+                conds.append("julianday(b.banned_at) <= julianday(?)")
+                params.append(end)
+        else:
+            days = {"24h": 1, "7d": 7, "30d": 30}.get(period)
+            if days:
+                conds.append("julianday(b.banned_at) > julianday('now') - ?")
+                params.append(days)
+
+        where = " AND ".join(conds)
+        sort_map = {
+            "recent": "b.banned_at DESC",
+            "oldest": "b.banned_at ASC",
+            "ip": "b.ip ASC",
+            "jail": "b.jail ASC, b.banned_at DESC",
+        }
+        order = sort_map.get(sort, "b.banned_at DESC")
+
+        total = conn.execute(
+            f"SELECT COUNT(*) FROM security_bans b WHERE {where}", params
+        ).fetchone()[0]
+
+        rows = conn.execute(
+            f"SELECT b.ip, b.jail, b.machine_id, b.banned_at, b.ban_count, "
+            f"g.country, g.city, g.asn, g.org FROM security_bans b "
+            f"LEFT JOIN geo_cache g ON b.ip = g.ip "
+            f"WHERE {where} "
+            f"ORDER BY {order} LIMIT 10000",
+            params,
+        ).fetchall()
+        items = [dict(r) for r in rows]
+        truncated = total > len(items)
+
+        ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+        # X-Truncated / X-Total-Count let the UI warn before downloading a
+        # partial stream (same contract as the events export).
+        export_headers = {
+            "Content-Disposition": f"attachment; filename=security-bans-{ts}.csv",
+            "X-Total-Count": str(total),
+            "X-Truncated": "true" if truncated else "false",
+        }
+
+        import csv
+        import io
+        output = io.StringIO()
+        if items:
+            # 防 CSV 公式注入：文本字段若以 =+-@ 开头，加 ' 前缀。
+            def _csv_safe(v):
+                if isinstance(v, str) and v and v[0] in "=+-@\t\r":
+                    return "'" + v
+                return v
+            safe_items = [{k: _csv_safe(v) for k, v in row.items()} for row in items]
+            writer = csv.DictWriter(output, fieldnames=safe_items[0].keys())
+            writer.writeheader()
+            writer.writerows(safe_items)
+        return Response(content=output.getvalue(), media_type="text/csv", headers=export_headers)
+    finally:
+        conn.close()
+
+
 @router.get("/security/stats/summary")
 async def security_stats_summary(machine_id: str = ""):
     """All-time aggregate stats for the three snapshot cards.
@@ -598,7 +693,9 @@ async def security_stats_timeseries(
     machine_id:  optional per-machine filter (empty = all machines)
 
     Returns {bucket, offset, tz_offset, buckets:[{key, total, unique_ips,
-    by_type:{...}}]} with empty buckets zero-filled, ordered lexicographically.
+    by_type:{...}, by_machine:{...}}]} with empty buckets zero-filled, ordered
+    lexicographically. by_machine is only populated when no machine_id filter
+    is applied (per-machine breakdown of a single machine is meaningless).
     """
     if bucket not in _BUCKET_FMT:
         raise HTTPException(400, f"invalid bucket: {bucket}")
@@ -647,12 +744,28 @@ async def security_stats_timeseries(
             if r["b"] is not None:
                 by_type.setdefault(r["b"], {})[r["t"]] = r["c"]
 
+        # Per-machine breakdown — only meaningful (and only computed) when no
+        # machine filter is applied; backs the chart's "Split by machine".
+        by_machine: dict[str, dict[str, int]] = {}
+        if not machine_id:
+            mrows = conn.execute(
+                f"SELECT strftime(?, e.ts, ?) AS b, e.machine_id AS m, SUM(e.count) AS c "
+                f"FROM security_events e "
+                f"WHERE instr(e.ts, 'T') > 0 {wcond} "
+                f"GROUP BY b, m",
+                (fmt, mod, *wparam),
+            ).fetchall()
+            for r in mrows:
+                if r["b"] is not None:
+                    by_machine.setdefault(r["b"], {})[r["m"]] = r["c"]
+
         buckets = [
             {
                 "key": k,
                 "total": totals.get(k, 0),
                 "unique_ips": uniq.get(k, 0),
                 "by_type": by_type.get(k, {}),
+                "by_machine": by_machine.get(k, {}),
             }
             for k in keys
         ]

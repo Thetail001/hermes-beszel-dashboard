@@ -9,7 +9,7 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { geoEqualEarth, geoPath } from "d3-geo"
 import { feature } from "topojson-client"
-import { apiJson, createSeqGuard, fetchExportFile, localToUTC, parseRotateResult, splitKeyValue, timelineView } from "@/lib/security-utils"
+import { apiJson, createSeqGuard, fetchExportFile, formatCount, localToUTC, machineColor, parseRotateResult, splitKeyValue, timelineView } from "@/lib/security-utils"
 
 // ---------------------------------------------------------------- types
 interface SecurityEvent {
@@ -133,15 +133,6 @@ function timeAgo(iso: string): string {
 	return `${Math.floor(h / 24)}d ago`
 }
 
-/** Compact, readable counters: thousands get separators, ≥1M gets K/M/B. */
-function formatCount(n: number | null | undefined): string {
-	if (n == null) return "-"
-	if (n >= 1_000_000) {
-		return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n)
-	}
-	return n.toLocaleString("en")
-}
-
 function buildQueryString(f: FilterState): string {
 	const p = new URLSearchParams()
 	if (f.period && f.period !== "custom") p.set("period", f.period)
@@ -254,6 +245,7 @@ interface TimeseriesBucket {
 	total: number
 	unique_ips: number
 	by_type: Record<string, number>
+	by_machine?: Record<string, number>
 }
 
 function chartWindowLabel(bucket: ChartBucket, keys: string[]): string {
@@ -279,12 +271,13 @@ function chartTickLabel(key: string, bucket: ChartBucket): string {
 	return new Date(2000, m - 1, 1).toLocaleDateString(undefined, { month: "short" })
 }
 
-/** Events time-bucket bar chart: hourly/daily/monthly, pan, metric toggle and type stacking. */
-function EventsChart({ machineId, refreshInterval }: { machineId: string; refreshInterval: number }) {
+/** Events time-bucket bar chart: hourly/daily/monthly, pan, metric toggle and type/machine stacking. */
+function EventsChart({ machineId, machines, refreshInterval }: { machineId: string; machines: Machine[]; refreshInterval: number }) {
 	const [bucket, setBucket] = useState<ChartBucket>("hour")
 	const [offset, setOffset] = useState(0)
 	const [metric, setMetric] = useState<ChartMetric>("events")
 	const [splitType, setSplitType] = useState(false)
+	const [splitMachine, setSplitMachine] = useState(false)
 	const [buckets, setBuckets] = useState<TimeseriesBucket[]>([])
 	const [loadFailed, setLoadFailed] = useState(false)
 	// 请求序号守卫：切机器/bucket/翻页后，旧查询的慢响应不得覆盖新查询的数据（R3-04）。
@@ -324,8 +317,9 @@ function EventsChart({ machineId, refreshInterval }: { machineId: string; refres
 		return () => clearInterval(id)
 	}, [load, refreshInterval])
 
-	const { chartData, activeTypes } = useMemo(() => {
+	const { chartData, activeTypes, activeMachines } = useMemo(() => {
 		const active = new Set<string>()
+		const machineTotals = new Map<string, number>()
 		const data: any[] = buckets.map((b) => {
 			const row: Record<string, number | string> = {
 				label: chartTickLabel(b.key, bucket),
@@ -336,14 +330,31 @@ function EventsChart({ machineId, refreshInterval }: { machineId: string; refres
 				row[t] = c
 				if (c > 0) active.add(t)
 			}
+			for (const [m, c] of Object.entries(b.by_machine || {})) {
+				row[m] = c
+				if (c > 0) machineTotals.set(m, (machineTotals.get(m) || 0) + c)
+			}
 			return row
 		})
-		return { chartData: data, activeTypes: Array.from(active) }
+		// 机器按窗口内总量降序：图例/配色顺序稳定，量大的机器排前面。
+		const machinesSorted = Array.from(machineTotals.entries())
+			.sort((a, b) => b[1] - a[1])
+			.map((e) => e[0])
+		return { chartData: data, activeTypes: Array.from(active), activeMachines: machinesSorted }
 	}, [buckets, bucket])
+
+	// 机器 id → 显示名（图表图例用）。机器列表来自 /security/machines。
+	const machineName = useMemo(() => {
+		const map = new Map<string, string>()
+		for (const m of machines) map.set(m.id, m.name || m.id)
+		return (id: string) => map.get(id) || id
+	}, [machines])
 
 	// Forward navigation is clamped to the current window (no future buckets).
 	const canGoForward = offset < 0
-	const isStacked = metric === "events" && splitType
+	// 选中具体机器时后端不下发 by_machine，Split by machine 只允许 All machines。
+	const machineSplitActive = splitMachine && !machineId
+	const isStacked = metric === "events" && (splitType || machineSplitActive)
 	// Evenly-spaced axis ticks per granularity. recharts interval=N renders
 	// every (N+1)-th tick, so hour shows every 4h, day every 5d, month all.
 	const tickInterval = bucket === "hour" ? 3 : bucket === "day" ? 4 : 0
@@ -411,15 +422,34 @@ function EventsChart({ machineId, refreshInterval }: { machineId: string; refres
 						</Button>
 					</div>
 					{metric === "events" && (
-						<label className="flex items-center gap-2 text-xs text-muted-foreground">
-							<input
-								type="checkbox"
-								checked={splitType}
-								onChange={(e) => setSplitType(e.target.checked)}
-								className="h-3.5 w-3.5"
-							/>
-							Split by type
-						</label>
+						<>
+							<label className="flex items-center gap-2 text-xs text-muted-foreground">
+								<input
+									type="checkbox"
+									checked={splitType}
+									onChange={(e) => {
+										setSplitType(e.target.checked)
+										if (e.target.checked) setSplitMachine(false)
+									}}
+									className="h-3.5 w-3.5"
+								/>
+								Split by type
+							</label>
+							{!machineId && (
+								<label className="flex items-center gap-2 text-xs text-muted-foreground">
+									<input
+										type="checkbox"
+										checked={machineSplitActive}
+										onChange={(e) => {
+											setSplitMachine(e.target.checked)
+											if (e.target.checked) setSplitType(false)
+										}}
+										className="h-3.5 w-3.5"
+									/>
+									Split by machine
+								</label>
+							)}
+						</>
 					)}
 				</div>
 			</CardHeader>
@@ -431,16 +461,29 @@ function EventsChart({ machineId, refreshInterval }: { machineId: string; refres
 						<YAxis tickLine={false} axisLine={false} fontSize={11} allowDecimals={false} />
 						<ChartTooltip content={<ChartTooltipContent />} />
 						{isStacked ? (
-							EVENT_TYPE_KEYS.filter((t) => activeTypes.includes(t)).map((t) => (
-								<Bar
-									key={t}
-									dataKey={t}
-									name={t.replace("_", " ")}
-									stackId="a"
-									fill={TYPE_COLORS[t]}
-									isAnimationActive={false}
-								/>
-							))
+							machineSplitActive ? (
+								activeMachines.map((m, i) => (
+									<Bar
+										key={m}
+										dataKey={m}
+										name={machineName(m)}
+										stackId="a"
+										fill={machineColor(i)}
+										isAnimationActive={false}
+									/>
+								))
+							) : (
+								EVENT_TYPE_KEYS.filter((t) => activeTypes.includes(t)).map((t) => (
+									<Bar
+										key={t}
+										dataKey={t}
+										name={t.replace("_", " ")}
+										stackId="a"
+										fill={TYPE_COLORS[t]}
+										isAnimationActive={false}
+									/>
+								))
+							)
 						) : (
 							<Bar
 								dataKey={metric === "events" ? "__total" : "__uniq"}
@@ -1495,6 +1538,7 @@ export default function SecurityPage() {
 	const [mapBansTotal, setMapBansTotal] = useState(0) // 服务端 total，> mapBans.length 即被 5000 上限截断
 	// 导出失败提示（R4-02）：HTTP 失败不能静默下载错误内容
 	const [exportError, setExportError] = useState<string | null>(null)
+	const [bansExportError, setBansExportError] = useState<string | null>(null)
 	// 地图模式（attackers/bans）放在这里而非 AttackMap 内部：控件区要根据 mode
 	// 禁用无效的 Period/Show，并给 bans 模式显示截断标注（R3-06）
 	const [mapMode, setMapMode] = useState<"attackers" | "bans">("attackers")
@@ -1759,6 +1803,37 @@ export default function SecurityPage() {
 		URL.revokeObjectURL(url)
 	}
 
+	const handleBansExport = async () => {
+		setBansExportError(null)
+		// 与 fetchBans 同一套参数（bans 有自己的筛选维度，不能用 attackers 的 qs）。
+		const p = new URLSearchParams()
+		if (bansFilter.ip) p.set("ip", bansFilter.ip)
+		if (bansFilter.jail) p.set("jail", bansFilter.jail)
+		p.set("sort", bansFilter.sort)
+		p.set("period", bansFilter.period)
+		if (bansFilter.start) p.set("start", localToUTC(bansFilter.start))
+		if (bansFilter.end) p.set("end", localToUTC(bansFilter.end))
+		if (filter.machine_id) p.set("machine_id", filter.machine_id)
+		let file: { blob: Blob; filename: string; total: string; truncated: boolean }
+		try {
+			file = await fetchExportFile(`/api/plugins/beszel/security/bans/export?${p}`)
+		} catch (e) {
+			setBansExportError(`Export failed: ${e instanceof Error ? e.message : "network error"}`)
+			return
+		}
+		if (file.truncated && file.total && !window.confirm(`Export truncated: only the first 10,000 of ${file.total} matching bans will be exported. Continue?`)) {
+			return
+		}
+		const url = URL.createObjectURL(file.blob)
+		const a = document.createElement("a")
+		a.href = url
+		a.download = file.filename || "security-bans.csv"
+		document.body.appendChild(a)
+		a.click()
+		a.remove()
+		URL.revokeObjectURL(url)
+	}
+
 	const handleRotate = (_days: number) => {
 		// Refresh data after rotation
 		fetchData()
@@ -1862,7 +1937,7 @@ export default function SecurityPage() {
 			</div>
 
 			{/* Events time-series chart */}
-			<EventsChart machineId={filter.machine_id} refreshInterval={refreshInterval} />
+			<EventsChart machineId={filter.machine_id} machines={machines} refreshInterval={refreshInterval} />
 
 			{/* Attack map */}
 			<Card>
@@ -1966,7 +2041,18 @@ export default function SecurityPage() {
 			{/* Active bans */}
 			<Card>
 				<CardHeader className="space-y-3">
-					<CardTitle><Trans>Active Bans</Trans></CardTitle>
+					<div className="flex items-center justify-between">
+						<CardTitle><Trans>Active Bans</Trans></CardTitle>
+						<div className="flex items-center gap-2">
+							<span className="text-xs text-muted-foreground"><Trans>Export filtered bans</Trans></span>
+							<Button variant="outline" size="sm" className="h-7 px-2 text-xs" onClick={handleBansExport}>
+								CSV
+							</Button>
+						</div>
+					</div>
+					{bansExportError && (
+						<p className="text-xs text-destructive">{bansExportError}</p>
+					)}
 					<div className="flex flex-wrap items-center gap-3 border-t pt-3">
 						<div className="flex items-center gap-2">
 							<Input

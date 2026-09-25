@@ -105,6 +105,13 @@ export default function Navbar() {
 								<ContainerIcon className="h-4 w-4 me-2.5" strokeWidth={1.5} />
 								<Trans>All Containers</Trans>
 							</DropdownMenuItem>
+							<DropdownMenuItem
+								onClick={() => navigate(getPagePath($router, "security"))}
+								className="flex items-center"
+							>
+								<ShieldIcon className="h-4 w-4 me-2.5" strokeWidth={1.5} />
+								<Trans>Security</Trans>
+							</DropdownMenuItem>
 							<DropdownMenuItem onClick={() => navigate(getPagePath($router, "smart"))} className="flex items-center">
 								<HardDriveIcon className="h-4 w-4 me-2.5" strokeWidth={1.5} />
 								<span>S.M.A.R.T.</span>

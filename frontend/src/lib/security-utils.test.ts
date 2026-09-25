@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { localToUTC, splitKeyValue, apiJson, createSeqGuard, fetchExportFile, parseRotateResult, timelineView } from "./security-utils"
+import { localToUTC, splitKeyValue, apiJson, createSeqGuard, fetchExportFile, parseRotateResult, timelineView, formatCount, machineColor } from "./security-utils"
 
 describe("localToUTC", () => {
 	it("datetime-local 值转成带时区偏移的 ISO", () => {
@@ -145,5 +145,39 @@ describe("fetchExportFile（R5-04：完整操作异常边界）", () => {
 		expect(r.total).toBe("12345")
 		expect(r.truncated).toBe(true)
 		vi.unstubAllGlobals()
+	})
+})
+
+describe("formatCount（K/M/B 紧凑记法）", () => {
+	it("null/undefined 显示 -", () => {
+		expect(formatCount(null)).toBe("-")
+		expect(formatCount(undefined)).toBe("-")
+	})
+
+	it("千以下原样显示", () => {
+		expect(formatCount(0)).toBe("0")
+		expect(formatCount(999)).toBe("999")
+	})
+
+	it("千级用 K", () => {
+		expect(formatCount(1500)).toBe("1.5K")
+		expect(formatCount(12345)).toBe("12.3K")
+	})
+
+	it("百万级用 M、十亿级用 B", () => {
+		expect(formatCount(3_400_000)).toBe("3.4M")
+		expect(formatCount(5_600_000_000)).toBe("5.6B")
+	})
+})
+
+describe("machineColor（机器配色盘）", () => {
+	it("同一序数颜色稳定", () => {
+		expect(machineColor(0)).toBe(machineColor(0))
+		expect(machineColor(2)).toMatch(/^#/)
+	})
+
+	it("越界取模回绕，不抛错", () => {
+		expect(machineColor(8)).toBe(machineColor(0))
+		expect(machineColor(17)).toBe(machineColor(1))
 	})
 })

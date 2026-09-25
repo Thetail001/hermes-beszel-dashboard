@@ -78,3 +78,33 @@ export function splitKeyValue(part: string): [string, string] | null {
 	if (idx <= 0) return null
 	return [part.slice(0, idx), part.slice(idx + 1)]
 }
+
+/** 计数显示：≥1,000 用 K/M/B 紧凑记法（1.2K / 3.4M / 5.6B），以下原样。
+ * 面板跑的是 SUM(count) 量级（分钟窗口聚合的总命中数），上量后裸数字
+ * （12,345,678）在卡片/图例里不可读。Intl compact 自动选单位。
+ * 抽到这里统一维护——security.tsx 的卡片、环形图、列表计数全部走这一个函数。 */
+export function formatCount(n: number | null | undefined): string {
+	if (n == null) return "-"
+	if (n >= 1_000) {
+		return new Intl.NumberFormat("en", { notation: "compact", maximumFractionDigits: 1 }).format(n)
+	}
+	return n.toLocaleString("en")
+}
+
+// Split-by-machine 图表的配色盘。机器数少（3~5 台），固定盘 + 取模回退；
+// 颜色与事件类型盘（TYPE_COLORS）区分，避免同图撞色。
+const MACHINE_COLORS = [
+	"#3b82f6", // blue
+	"#ef4444", // red
+	"#22c55e", // green
+	"#f59e0b", // amber
+	"#a855f7", // purple
+	"#06b6d4", // cyan
+	"#f97316", // orange
+	"#84cc16", // lime
+]
+
+/** 机器稳定取色：同一台机器在任何图里颜色一致（按机器序数取盘）。 */
+export function machineColor(index: number): string {
+	return MACHINE_COLORS[((index % MACHINE_COLORS.length) + MACHINE_COLORS.length) % MACHINE_COLORS.length]
+}
