@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest"
-import { localToUTC, splitKeyValue, apiJson, createSeqGuard, fetchExportFile, parseRotateResult, timelineView, formatCount, machineColor } from "./security-utils"
+import { buildChartRows, chartTickLabel, localToUTC, splitKeyValue, apiJson, createSeqGuard, fetchExportFile, machineColorFor, machineRowKey, parseRotateResult, timelineView, formatCount, machineColor } from "./security-utils"
 
 describe("localToUTC", () => {
 	it("datetime-local 值转成带时区偏移的 ISO", () => {
@@ -179,5 +179,70 @@ describe("machineColor（机器配色盘）", () => {
 	it("越界取模回绕，不抛错", () => {
 		expect(machineColor(8)).toBe(machineColor(0))
 		expect(machineColor(17)).toBe(machineColor(1))
+	})
+})
+
+describe("buildChartRows（审阅 P2-3：机器名不得污染统计键）", () => {
+	it("恶意机器名（__total/label/scan/__proto__）写入 __m_ 命名空间，统计键完好", () => {
+		// by_machine 走 JSON.parse 构造：真实 API 数据里 __proto__ 是普通 own key，
+		// 对象字面量则会把它当成原型设置（JS 坑），两种形态都要过。
+		const { chartData, activeMachines } = buildChartRows(
+			[
+				{
+					key: "2026-09-25 13:00",
+					total: 6,
+					unique_ips: 2,
+					by_type: { scan: 6 },
+					by_machine: JSON.parse('{"__total":3,"label":1,"__proto__":2}'),
+				},
+			],
+			"hour",
+		)
+		const row = chartData[0]
+		expect(row.__total).toBe(6) // 未被名为 __total 的机器覆盖
+		expect(row.label).toBe("13:00") // 轴标签未被名为 label 的机器覆盖
+		expect(row.scan).toBe(6) // 类型键未被同名机器覆盖
+		expect(row[machineRowKey("__total")]).toBe(3)
+		expect(row[machineRowKey("label")]).toBe(1)
+		expect(row[machineRowKey("__proto__")]).toBe(2)
+		expect(Object.keys(row)).not.toContain("__proto__")
+		// 机器按窗口总量降序：__total(3) > __proto__(2) > label(1)
+		expect(activeMachines).toEqual(["__total", "__proto__", "label"])
+	})
+
+	it("by_machine 缺省时退化为普通图表", () => {
+		const { chartData, activeTypes, activeMachines } = buildChartRows(
+			[{ key: "2026-09-25", total: 5, unique_ips: 4, by_type: { attack: 5 } }],
+			"day",
+		)
+		expect(chartData[0].label).toBe("25")
+		expect(chartData[0].attack).toBe(5)
+		expect(activeTypes).toEqual(["attack"])
+		expect(activeMachines).toEqual([])
+	})
+})
+
+describe("chartTickLabel", () => {
+	it("hour/day/month 三种粒度", () => {
+		expect(chartTickLabel("2026-09-25 13:00", "hour")).toBe("13:00")
+		expect(chartTickLabel("2026-09-25", "day")).toBe("25")
+		expect(chartTickLabel("2026-09", "month")).toBe(
+			new Date(2000, 8, 1).toLocaleDateString(undefined, { month: "short" }),
+		)
+	})
+})
+
+describe("machineColorFor（审阅 P2-4：颜色绑定机器标识，不随排名漂移）", () => {
+	it("同一台机器颜色与列表顺序无关", () => {
+		const ids = ["HK-01", "DE-01", "US-01"]
+		expect(machineColorFor("DE-01", ids)).toBe(machineColorFor("DE-01", [...ids].reverse()))
+		expect(machineColorFor("DE-01", ids)).toBe(machineColor(1))
+		expect(machineColorFor("US-01", ids)).toBe(machineColor(2))
+	})
+
+	it("列表外机器按 id 哈希回退且稳定", () => {
+		const ids = ["HK-01"]
+		expect(machineColorFor("GHOST", ids)).toBe(machineColorFor("GHOST", ids))
+		expect(machineColorFor("GHOST", ids)).toMatch(/^#/)
 	})
 })

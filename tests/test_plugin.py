@@ -5,6 +5,8 @@
 不碰生产库。
 """
 import atexit
+import asyncio
+import math
 import os
 import shutil
 import sqlite3
@@ -191,3 +193,73 @@ class TestSchemaMigration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestValidateEventHardening(unittest.TestCase):
+    """审阅 P1-1：畸形输入返回 None（拒单条），绝不抛异常（否则整批回滚）。"""
+
+    def test_unhashable_event_type(self):
+        ev = make_event(["ban"], "1.2.3.4", ago(10), "x")
+        self.assertIsNone(plugin_api._validate_event(ev))
+
+    def test_infinite_and_nan_count(self):
+        ev = make_event("scan", "1.2.3.4", ago(10), "x")
+        ev["count"] = math.inf  # type: ignore[dict-item] 畸形输入注入
+        self.assertIsNone(plugin_api._validate_event(ev))
+        ev["count"] = math.nan  # type: ignore[dict-item]
+        self.assertIsNone(plugin_api._validate_event(ev))
+
+    def test_ancient_timestamp_overflow(self):
+        ev = make_event("scan", "1.2.3.4", "0001-01-01T00:00:00+14:00", "x")
+        self.assertIsNone(plugin_api._validate_event(ev))
+
+    def test_90d_boundary(self):
+        # 审阅 P2-6：90 天以内可收（rotate 保留边界），超 90 天必须拒——
+        # 与 rotate 的 DELETE ... < now-90d 对齐，先收后删毫无意义。
+        ok = make_event("scan", "1.2.3.4", (datetime.now(timezone.utc) - timedelta(days=89, hours=23)).isoformat(), "x")
+        self.assertIsNotNone(plugin_api._validate_event(ok))
+        old = make_event("scan", "1.2.3.4", (datetime.now(timezone.utc) - timedelta(days=90, seconds=1)).isoformat(), "x")
+        self.assertIsNone(plugin_api._validate_event(old))
+
+
+class TestFail2banMillisecond(unittest.TestCase):
+    """审阅 P1-2：fail2ban 毫秒必须入库，同秒 Unban(.100)→Ban(.900) 不冤杀。"""
+
+    def test_collector_keeps_milliseconds(self):
+        ev = sc.parse_f2b_line("2026-09-07 12:00:00,123 fail2ban.actions [1]: NOTICE [sshd] Ban 1.2.3.4")
+        self.assertIsNotNone(ev)
+        self.assertEqual(datetime.fromisoformat(ev["ts"]).microsecond, 123000)
+        # 整秒日志输出格式与历史数据一致（小数省略）
+        ev0 = sc.parse_f2b_line("2026-09-07 12:00:00,000 fail2ban.actions [1]: NOTICE [sshd] Ban 1.2.3.4")
+        self.assertNotIn(".", ev0["ts"].replace("+00:00", ""))
+        # 同秒内 .100 早于 .900（字符串序 = 时间序）
+        u = sc.parse_f2b_line("2026-09-07 12:00:00,100 fail2ban.actions [1]: NOTICE [sshd] Unban 1.2.3.4")
+        b = sc.parse_f2b_line("2026-09-07 12:00:00,900 fail2ban.actions [1]: NOTICE [sshd] Ban 1.2.3.4")
+        self.assertLess(u["ts"], b["ts"])
+
+    def test_center_does_not_phantom_close_same_second_ban(self):
+        base = datetime.now(timezone.utc) - timedelta(minutes=5)
+        conn = make_conn()
+        with no_geo():
+            plugin_api._ingest_one(conn, "A", make_event("unban", "1.2.3.4", base.replace(microsecond=100000).isoformat(), "u1", jail="sshd"))
+            plugin_api._ingest_one(conn, "A", make_event("ban", "1.2.3.4", base.replace(microsecond=900000).isoformat(), "b1", jail="sshd"))
+        active = conn.execute("SELECT COUNT(*) FROM security_bans WHERE unbanned_at IS NULL").fetchone()[0]
+        self.assertEqual(active, 1)
+
+
+class TestLazyGeoCommit(unittest.TestCase):
+    """审阅 P2-5：ip 档案懒富化的 geo_cache 写入必须提交，否则每次重复查库。"""
+
+    def test_enrichment_row_persists_and_counts_up(self):
+        # 真实 _geoip_lookup：测试目录无 mmdb → 写 NULL 行，但行必须真正落库。
+        r1 = asyncio.run(plugin_api.security_ip_profile("9.9.9.9"))
+        self.assertIsNotNone(r1["geo"])
+        conn = sqlite3.connect(os.environ["BESZEL_SEC_DB"])
+        n1 = conn.execute("SELECT query_count FROM geo_cache WHERE ip='9.9.9.9'").fetchone()
+        conn.close()
+        self.assertIsNotNone(n1)  # close 时未被回滚
+        asyncio.run(plugin_api.security_ip_profile("9.9.9.9"))
+        conn = sqlite3.connect(os.environ["BESZEL_SEC_DB"])
+        n2 = conn.execute("SELECT query_count FROM geo_cache WHERE ip='9.9.9.9'").fetchone()
+        conn.close()
+        self.assertEqual(n2[0], n1[0] + 1)  # 已提交才会递增；未提交永远停在 1

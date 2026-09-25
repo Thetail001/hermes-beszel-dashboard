@@ -1060,6 +1060,9 @@ async def security_ip_profile(ip: str):
         if not geo or not geo["country"] or not geo["asn"]:
             _geoip_lookup(conn, ip)
             geo = conn.execute("SELECT * FROM geo_cache WHERE ip = ?", (ip,)).fetchone()
+            # 懒富化在请求事务里写 geo_cache，必须提交——否则 finally 里的
+            # close() 会回滚它，同一 IP 每次点开都重复查 mmdb（审阅 P2-5）。
+            conn.commit()
         return {
             "ip": ip,
             "events": [dict(r) for r in events],
@@ -1593,7 +1596,9 @@ def _validate_event(ev):
         return None
 
     event_type = ev.get("event_type")
-    if event_type not in _VALID_EVENT_TYPES:
+    # isinstance 前置：event_type 传列表/字典时 `not in set` 直接抛
+    # TypeError（unhashable），整条批量回滚 + 500（审阅 P1-1）。
+    if not isinstance(event_type, str) or event_type not in _VALID_EVENT_TYPES:
         return None
 
     src_ip = ev.get("src_ip")
@@ -1614,17 +1619,21 @@ def _validate_event(ev):
         if ts_dt.tzinfo is None:
             ts_dt = ts_dt.replace(tzinfo=timezone.utc)
         ts_dt = ts_dt.astimezone(timezone.utc)  # 归一化 UTC：中心入库契约
-    except ValueError:
+    except (ValueError, OverflowError):
+        # 极端时间戳（如 year 1 + 东十四区）astimezone 会抛 OverflowError（审阅 P1-1）。
         return None
     now = datetime.now(timezone.utc)
     if ts_dt > now + timedelta(minutes=15):  # clock-skew guard
         return None
-    if (now - ts_dt).days > 90:  # older than the rotation window → drop
+    # 用 timedelta 比较而非 .days 向下取整：90d12h 的事件之前会被接收，
+    # 但 rotate 随即按 >90 天删除——先收后删毫无意义（审阅 P2-6）。
+    if now - ts_dt > timedelta(days=90):  # older than the rotation window → drop
         return None
 
     try:
         count = int(ev.get("count", 1))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # float("inf")/nan 经 int() 抛 OverflowError/ValueError，接住（审阅 P1-1）。
         return None
     if not (1 <= count <= _MAX_COUNT):
         return None

@@ -108,3 +108,82 @@ const MACHINE_COLORS = [
 export function machineColor(index: number): string {
 	return MACHINE_COLORS[((index % MACHINE_COLORS.length) + MACHINE_COLORS.length) % MACHINE_COLORS.length]
 }
+
+/** 机器稳定取色（按标识，不按当页排名）：优先按 allIds（/security/machines
+ * 返回顺序，稳定）分配；列表外的机器（已下线但还有历史事件）按 id 哈希回退。
+ * 翻页/自动刷新后窗口内排名会变——若按排名取色，同一台机器的颜色会互换，
+ * 用户会把攻击量变化归错机器（审阅 P2-4）。 */
+export function machineColorFor(id: string, allIds: string[]): string {
+	let idx = allIds.indexOf(id)
+	if (idx < 0) {
+		let h = 0
+		for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0
+		idx = Math.abs(h)
+	}
+	return machineColor(idx)
+}
+
+// ---- Events 图表的纯函数（从 security.tsx 抽出，使数据转换可单测）----
+
+export type ChartBucket = "hour" | "day" | "month"
+
+export interface TimeseriesBucketInput {
+	key: string
+	total: number
+	unique_ips: number
+	by_type?: Record<string, number>
+	by_machine?: Record<string, number>
+}
+
+export interface ChartRow {
+	label: string
+	__total: number
+	__uniq: number
+	[key: string]: number | string
+}
+
+export function chartTickLabel(key: string, bucket: ChartBucket): string {
+	if (bucket === "hour") return key.slice(11)
+	if (bucket === "day") return String(parseInt(key.slice(8), 10))
+	const m = parseInt(key.slice(5), 10)
+	return new Date(2000, m - 1, 1).toLocaleDateString(undefined, { month: "short" })
+}
+
+/** 机器系列在 chart row 里的内部键前缀。机器名是用户可改的 beszel 系统名，
+ * 可能是 "scan"、"__total" 甚至 "__proto__"——必须命名空间隔离，否则机器名
+ * 会覆盖总量/轴标签/类型键，即使没勾选机器拆分也会污染普通图表（审阅 P2-3）。 */
+export const MACHINE_KEY_PREFIX = "__m_"
+
+export function machineRowKey(machineId: string): string {
+	return MACHINE_KEY_PREFIX + machineId
+}
+
+/** 后端 timeseries 桶 → recharts 行数据。机器系列写入 __m_ 命名空间，
+ * activeMachines 保留原始机器名（图例/取色用），按窗口内总量降序。 */
+export function buildChartRows(
+	buckets: TimeseriesBucketInput[],
+	bucket: ChartBucket,
+): { chartData: ChartRow[]; activeTypes: string[]; activeMachines: string[] } {
+	const active = new Set<string>()
+	const machineTotals = new Map<string, number>()
+	const chartData: ChartRow[] = buckets.map((b) => {
+		const row: ChartRow = {
+			label: chartTickLabel(b.key, bucket),
+			__total: b.total,
+			__uniq: b.unique_ips,
+		}
+		for (const [t, c] of Object.entries(b.by_type || {})) {
+			row[t] = c
+			if (c > 0) active.add(t)
+		}
+		for (const [m, c] of Object.entries(b.by_machine || {})) {
+			row[machineRowKey(m)] = c
+			if (c > 0) machineTotals.set(m, (machineTotals.get(m) || 0) + c)
+		}
+		return row
+	})
+	const activeMachines = Array.from(machineTotals.entries())
+		.sort((a, b) => b[1] - a[1])
+		.map((e) => e[0])
+	return { chartData, activeTypes: Array.from(active), activeMachines }
+}

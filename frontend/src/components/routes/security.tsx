@@ -9,7 +9,7 @@ import { ChartContainer, ChartLegend, ChartLegendContent, ChartTooltip, ChartToo
 import { Bar, BarChart, CartesianGrid, XAxis, YAxis } from "recharts"
 import { geoEqualEarth, geoPath } from "d3-geo"
 import { feature } from "topojson-client"
-import { apiJson, createSeqGuard, fetchExportFile, formatCount, localToUTC, machineColor, parseRotateResult, splitKeyValue, timelineView } from "@/lib/security-utils"
+import { apiJson, buildChartRows, createSeqGuard, fetchExportFile, formatCount, localToUTC, machineColorFor, machineRowKey, parseRotateResult, splitKeyValue, timelineView, TimeseriesBucketInput } from "@/lib/security-utils"
 
 // ---------------------------------------------------------------- types
 interface SecurityEvent {
@@ -237,16 +237,8 @@ function TypeDonut({ byType }: { byType: Record<string, number> }) {
 // ---------------------------------------------------------------- Events chart
 const EVENT_TYPE_KEYS = Object.keys(TYPE_COLORS)
 
-type ChartBucket = "hour" | "day" | "month"
+type ChartBucket = import("@/lib/security-utils").ChartBucket
 type ChartMetric = "events" | "unique_ips"
-
-interface TimeseriesBucket {
-	key: string
-	total: number
-	unique_ips: number
-	by_type: Record<string, number>
-	by_machine?: Record<string, number>
-}
 
 function chartWindowLabel(bucket: ChartBucket, keys: string[]): string {
 	if (!keys.length) return ""
@@ -264,13 +256,6 @@ function chartWindowLabel(bucket: ChartBucket, keys: string[]): string {
 	return keys[0].slice(0, 4)
 }
 
-function chartTickLabel(key: string, bucket: ChartBucket): string {
-	if (bucket === "hour") return key.slice(11)
-	if (bucket === "day") return String(parseInt(key.slice(8), 10))
-	const m = parseInt(key.slice(5), 10)
-	return new Date(2000, m - 1, 1).toLocaleDateString(undefined, { month: "short" })
-}
-
 /** Events time-bucket bar chart: hourly/daily/monthly, pan, metric toggle and type/machine stacking. */
 function EventsChart({ machineId, machines, refreshInterval }: { machineId: string; machines: Machine[]; refreshInterval: number }) {
 	const [bucket, setBucket] = useState<ChartBucket>("hour")
@@ -278,7 +263,7 @@ function EventsChart({ machineId, machines, refreshInterval }: { machineId: stri
 	const [metric, setMetric] = useState<ChartMetric>("events")
 	const [splitType, setSplitType] = useState(false)
 	const [splitMachine, setSplitMachine] = useState(false)
-	const [buckets, setBuckets] = useState<TimeseriesBucket[]>([])
+	const [buckets, setBuckets] = useState<TimeseriesBucketInput[]>([])
 	const [loadFailed, setLoadFailed] = useState(false)
 	// 请求序号守卫：切机器/bucket/翻页后，旧查询的慢响应不得覆盖新查询的数据（R3-04）。
 	const chartSeq = useRef(createSeqGuard()).current
@@ -317,38 +302,20 @@ function EventsChart({ machineId, machines, refreshInterval }: { machineId: stri
 		return () => clearInterval(id)
 	}, [load, refreshInterval])
 
-	const { chartData, activeTypes, activeMachines } = useMemo(() => {
-		const active = new Set<string>()
-		const machineTotals = new Map<string, number>()
-		const data: any[] = buckets.map((b) => {
-			const row: Record<string, number | string> = {
-				label: chartTickLabel(b.key, bucket),
-				__total: b.total,
-				__uniq: b.unique_ips,
-			}
-			for (const [t, c] of Object.entries(b.by_type)) {
-				row[t] = c
-				if (c > 0) active.add(t)
-			}
-			for (const [m, c] of Object.entries(b.by_machine || {})) {
-				row[m] = c
-				if (c > 0) machineTotals.set(m, (machineTotals.get(m) || 0) + c)
-			}
-			return row
-		})
-		// 机器按窗口内总量降序：图例/配色顺序稳定，量大的机器排前面。
-		const machinesSorted = Array.from(machineTotals.entries())
-			.sort((a, b) => b[1] - a[1])
-			.map((e) => e[0])
-		return { chartData: data, activeTypes: Array.from(active), activeMachines: machinesSorted }
-	}, [buckets, bucket])
+	// 数据转换是纯函数（security-utils.buildChartRows）：机器系列写入 __m_
+	// 命名空间，不会被用户可改的机器名（"scan"/"__total"…）覆盖统计键。
+	const { chartData, activeTypes, activeMachines } = useMemo(
+		() => buildChartRows(buckets, bucket),
+		[buckets, bucket],
+	)
 
-	// 机器 id → 显示名（图表图例用）。机器列表来自 /security/machines。
+	// 机器 id → 显示名（图例用）；机器顺序表（取色用，颜色稳定绑定机器标识）。
 	const machineName = useMemo(() => {
 		const map = new Map<string, string>()
 		for (const m of machines) map.set(m.id, m.name || m.id)
 		return (id: string) => map.get(id) || id
 	}, [machines])
+	const machineIds = useMemo(() => machines.map((m) => m.id), [machines])
 
 	// Forward navigation is clamped to the current window (no future buckets).
 	const canGoForward = offset < 0
@@ -462,13 +429,13 @@ function EventsChart({ machineId, machines, refreshInterval }: { machineId: stri
 						<ChartTooltip content={<ChartTooltipContent />} />
 						{isStacked ? (
 							machineSplitActive ? (
-								activeMachines.map((m, i) => (
+								activeMachines.map((m) => (
 									<Bar
 										key={m}
-										dataKey={m}
+										dataKey={machineRowKey(m)}
 										name={machineName(m)}
 										stackId="a"
-										fill={machineColor(i)}
+										fill={machineColorFor(m, machineIds)}
 										isAnimationActive={false}
 									/>
 								))

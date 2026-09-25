@@ -481,8 +481,11 @@ class Pusher:
 
 
 # ------------------------------------------------------------------ parsers
+# 毫秒必须捕获入库：同秒内的 Unban(…,100) 早于 Ban(…,900)，丢弃毫秒会让
+# 中心端 julianday(unban) >= julianday(ban) 成立，把新封禁误判为
+# "事后重放旧 ban" 而立刻关闭（审阅 P1-2）。
 F2B_RE = re.compile(
-    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),\d+ "
+    r"^(?P<ts>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}),(?P<ms>\d+) "
     r"fail2ban\.actions\s+\[\d+\]: NOTICE\s+\[(?P<jail>[\w\-]+)\] "
     r"(?P<action>Ban|Unban) (?P<ip>[0-9a-fA-F.:]+)"
 )
@@ -523,7 +526,10 @@ def parse_f2b_line(line: str) -> Optional[dict]:
         return None
     if not is_public_ip(m.group("ip")):
         return None
-    ts = datetime.strptime(m.group("ts"), "%Y-%m-%d %H:%M:%S")
+    # 毫秒补零到 6 位喂 %f（strptime 的微秒位）；isoformat 对整秒自动省略
+    # 小数部分，老日志（,000）的时间格式与历史数据完全一致。
+    frac = m.group("ms").ljust(6, "0")[:6]
+    ts = datetime.strptime(f"{m.group('ts')}.{frac}", "%Y-%m-%d %H:%M:%S.%f")
     # fail2ban.log timestamps are naive local time; astimezone() first assumes
     # the system-local timezone, then converts to UTC (unlike replace(), which
     # would merely label local wall-clock time as UTC and skew events 8h on
